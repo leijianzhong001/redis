@@ -48,14 +48,14 @@
 #define DICT_NOTUSED(V) ((void) V)
 
 typedef struct dictEntry {
-    void *key;
+    void *key; // 8
     union {
         void *val;
         uint64_t u64;
         int64_t s64;
         double d;
-    } v;
-    struct dictEntry *next;
+    } v; // 8
+    struct dictEntry *next; // 8
 } dictEntry;
 
 typedef struct dictType {
@@ -71,18 +71,18 @@ typedef struct dictType {
 /* This is our hash table structure. Every dictionary has two of this as we
  * implement incremental rehashing, for the old to the new table. */
 typedef struct dictht {
-    dictEntry **table;
-    unsigned long size;
-    unsigned long sizemask;
-    unsigned long used;
+    dictEntry **table; // 这是一个指针，实际上会赋值为一个*dictEntry类型数组 8
+    unsigned long size; // 8
+    unsigned long sizemask; // 8
+    unsigned long used; // 8
 } dictht;
 
 typedef struct dict {
-    dictType *type;
-    void *privdata;
-    dictht ht[2];
-    long rehashidx; /* rehashing not in progress if rehashidx == -1 */
-    int16_t pauserehash; /* If >0 rehashing is paused (<0 indicates coding error) */
+    dictType *type; // 8
+    void *privdata; // 8
+    dictht ht[2]; // 一主一备两个hashtable, 注意不是两个dictEntry  64
+    long rehashidx; /* rehashing not in progress if rehashidx == -1 */ // 8
+    int16_t pauserehash; /* If >0 rehashing is paused (<0 indicates coding error) */ // 2
 } dict;
 
 /* If safe is set to 1 this is a safe iterator, that means, you can call
@@ -129,6 +129,7 @@ typedef void (dictScanBucketFunction)(void *privdata, dictEntry **bucketref);
     if ((d)->type->keyDestructor) \
         (d)->type->keyDestructor((d)->privdata, (entry)->key)
 
+// do {...} while(0) 只执行一次
 #define dictSetKey(d, entry, _key_) do { \
     if ((d)->type->keyDup) \
         (entry)->key = (d)->type->keyDup((d)->privdata, _key_); \

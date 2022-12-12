@@ -203,10 +203,10 @@
 /* Different encoding/length possibilities */
 #define ZIP_STR_MASK 0xc0
 #define ZIP_INT_MASK 0x30
-#define ZIP_STR_06B (0 << 6)
-#define ZIP_STR_14B (1 << 6)
-#define ZIP_STR_32B (2 << 6)
-#define ZIP_INT_16B (0xc0 | 0<<4)
+#define ZIP_STR_06B (0 << 6) // 0
+#define ZIP_STR_14B (1 << 6) // 01
+#define ZIP_STR_32B (2 << 6) // 10
+#define ZIP_INT_16B (0xc0 | 0<<4) //
 #define ZIP_INT_32B (0xc0 | 1<<4)
 #define ZIP_INT_64B (0xc0 | 2<<4)
 #define ZIP_INT_24B (0xc0 | 3<<4)

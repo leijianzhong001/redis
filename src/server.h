@@ -710,12 +710,12 @@ typedef struct clientReplyBlock {
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
 typedef struct redisDb {
-    dict *dict;                 /* The keyspace for this DB */
-    dict *expires;              /* Timeout of keys with a timeout set */
-    dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP)*/
-    dict *ready_keys;           /* Blocked keys that received a PUSH */
-    dict *watched_keys;         /* WATCHED keys for MULTI/EXEC CAS */
-    int id;                     /* Database ID */
+    dict *dict;                 /* The keyspace for this DB  数据库字典，该redisDb所有的数据都存储在这*/
+    dict *expires;              /* Timeout of keys with a timeout set 过期字典，存储了redis中所有设置了过期时间的key以及对应的过期时间，过期时间是long long类型的Unix时间戳*/
+    dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP) 处于阻塞状态的key和对应的客户端*/
+    dict *ready_keys;           /* Blocked keys that received a PUSH  准备好数据后可以解除阻塞状态的键和响应的客户端*/
+    dict *watched_keys;         /* WATCHED keys for MULTI/EXEC CAS  被watch命令监控的key和对应的客户端*/
+    int id;                     /* Database ID  数据库id*/
     long long avg_ttl;          /* Average TTL, just for stats */
     unsigned long expires_cursor; /* Cursor of the active expire cycle. */
     list *defrag_later;         /* List of key names to attempt to defrag one by one, gradually. */
@@ -1179,7 +1179,7 @@ struct redisServer {
     mode_t umask;               /* The umask value of the process on startup */
     int hz;                     /* serverCron() calls frequency in hertz */
     int in_fork_child;          /* indication that this is a fork child */
-    redisDb *db;
+    redisDb *db;                /* 数据库对象，这似乎应该是个数组？ */
     dict *commands;             /* Command table */
     dict *orig_commands;        /* Command table before command renaming. */
     aeEventLoop *el;

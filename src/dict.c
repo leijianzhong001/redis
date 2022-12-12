@@ -315,6 +315,8 @@ int dictAdd(dict *d, void *key, void *val)
  * with the existing entry if existing is not NULL.
  *
  * If key was added, the hash entry is returned to be manipulated by the caller.
+ *
+ * **existing：如果字典中已存在参数key, 则将对应的dictEntry的指针赋值给**existing，并返回null, 否则返回创建的dictEntry
  */
 dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing)
 {
@@ -322,10 +324,12 @@ dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing)
     dictEntry *entry;
     dictht *ht;
 
+    // dictIsRehashing 如果字典正在扩容，则执行一次单步扩容操作。
     if (dictIsRehashing(d)) _dictRehashStep(d);
 
     /* Get the index of the new element, or -1 if
      * the element already exists. */
+    // 计算参数key的hash表数组索引，返回-1， 代表键已存在，此时dictAddRaw函数返回null,代表该键已存在
     if ((index = _dictKeyIndex(d, key, dictHashKey(d,key), existing)) == -1)
         return NULL;
 
@@ -333,13 +337,16 @@ dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing)
      * Insert the element in top, with the assumption that in a database
      * system it is more likely that recently added entries are accessed
      * more frequently. */
+    // 如果该字典正在扩容，则将新的dictEntry添加到ht[1]中，否则添加到ht[0]
     ht = dictIsRehashing(d) ? &d->ht[1] : &d->ht[0];
+    // 创建dictEntry, 头插到hash表数组对应位置的链表中。Redis字典使用链表法解决hash冲突问题，hash表数组的元素都是链表
     entry = zmalloc(sizeof(*entry));
     entry->next = ht->table[index];
     ht->table[index] = entry;
     ht->used++;
 
     /* Set the hash entry fields. */
+    // 将key设置到dictEntry中
     dictSetKey(d, entry, key);
     return entry;
 }

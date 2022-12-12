@@ -6275,8 +6275,11 @@ int main(int argc, char **argv) {
     uint8_t hashseed[16];
     getRandomBytes(hashseed,sizeof(hashseed));
     dictSetHashFunctionSeed(hashseed);
+    // 【1】 检查该redis服务器是否以sentinel模式启动
     server.sentinel_mode = checkForSentinelMode(argc,argv);
+    // 【2】 初始化所有配置项为默认值
     initServerConfig();
+    // 初始化acl机制
     ACLInit(); /* The ACL subsystem must be initialized ASAP because the
                   basic networking code and client creation depends on it. */
     moduleInitModulesSystem();
@@ -6284,6 +6287,7 @@ int main(int argc, char **argv) {
 
     /* Store the executable path and arguments in a safe place in order
      * to be able to restart the server later. */
+    // 【3】 记录redis可执行程序的启动路径以及启动参数，以便后续重启服务器
     server.executable = getAbsolutePath(argv[0]);
     server.exec_argv = zmalloc(sizeof(char*)*(argc+1));
     server.exec_argv[argc] = NULL;
@@ -6292,6 +6296,7 @@ int main(int argc, char **argv) {
     /* We need to init sentinel right now as parsing the configuration file
      * in sentinel mode will have the effect of populating the sentinel
      * data structures with master nodes to monitor. */
+    // 【4】 如果以sentinel模式启动，初始化sentinel相关机制
     if (server.sentinel_mode) {
         initSentinelConfig();
         initSentinel();
@@ -6300,6 +6305,7 @@ int main(int argc, char **argv) {
     /* Check if we need to start in redis-check-rdb/aof mode. We just execute
      * the program main. However the program is part of the Redis executable
      * so that we can easily execute an RDB check on loading errors. */
+    // 【5】 如果启动程序是redis-check-rdb或者redis-check-aof，则执行redis_check_rdb_main或redis_check_aof_main函数，他们会在尝试修复rdb和aof文件之后退出程序
     if (strstr(argv[0],"redis-check-rdb") != NULL)
         redis_check_rdb_main(argc,argv,NULL);
     else if (strstr(argv[0],"redis-check-aof") != NULL)
@@ -6310,6 +6316,7 @@ int main(int argc, char **argv) {
         sds options = sdsempty();
 
         /* Handle special options --help and --version */
+        // 【6】 对下面这些参数优先处理。strcmp函数比较两个字符串_Str1和_Str2， 如果_Str1==_Str2，则返回0，若_Str1<_Str2, 则返回负数，若_Str1>_Str2,则返回正数
         if (strcmp(argv[1], "-v") == 0 ||
             strcmp(argv[1], "--version") == 0) version();
         if (strcmp(argv[1], "--help") == 0 ||
