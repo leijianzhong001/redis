@@ -42,7 +42,15 @@
  * container: 2 bits, NONE=1, ZIPLIST=2.
  * recompress: 1 bit, bool, true if node is temporary decompressed for usage.
  * attempted_compress: 1 bit, boolean, used for verifying during testing.
- * extra: 10 bits, free for future use; pads out the remainder of 32 bits */
+ * extra: 10 bits, free for future use; pads out the remainder of 32 bits
+ * quicklistNode 是一个 32 字节的结构，用于描述快速列表的 ziplist。我们使用位字段(bit fields)将 quicklistNode 保持在 32 字节。
+ * count：16 位，最大 65536（最大 ZL字节数为 65K，因此最大计数实际上< 32K）。
+ * encoding：2 位，RAW=1，LZF=2。
+ * container：2 bits, NONE=1, ZIPLIST=2
+ * recompress：1 位，布尔值，如果节点临时解压缩以供使用，则为 true。
+ * attempted_compress：1 位，布尔值，用于在测试期间进行验证。
+ * extra：10位，免费供将来使用; 填充 32 位的其余部分
+ */
 typedef struct quicklistNode {
     struct quicklistNode *prev;
     struct quicklistNode *next;
@@ -101,7 +109,14 @@ typedef struct quicklistBookmark {
  *                of quicklistNodes to leave uncompressed at ends of quicklist.
  * 'fill' is the user-requested (or default) fill factor.
  * 'bookmakrs are an optional feature that is used by realloc this struct,
- *      so that they don't consume memory when not used. */
+ *      so that they don't consume memory when not used.
+ * 快速列表是一个描述快速列表的 40 字节结构（在 64 位系统上）。
+ * 'count' 是条目总数。
+ * 'len' 是快速列表节点的数量。
+ * 'compress' 如果禁用压缩，则为 0，否则它是在快速列表末尾保持未压缩的快速列表节点数。
+ * 'fill' 是用户请求的（或默认）填充因子。
+ * 'bookmakrs 是 realloc 这个结构使用的可选功能，这样它们在不使用时就不会消耗内存。
+ *  */
 typedef struct quicklist {
     quicklistNode *head;
     quicklistNode *tail;

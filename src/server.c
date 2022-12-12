@@ -3462,7 +3462,7 @@ void populateCommandTable(void) {
     int numcommands = sizeof(redisCommandTable)/sizeof(struct redisCommand);
 
     for (j = 0; j < numcommands; j++) {
-        struct redisCommand *c = redisCommandTable+j;
+        struct redisCommand *c = redisCommandT able+j;
         int retval1, retval2;
 
         /* Translate the command string flags description into an actual
