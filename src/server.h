@@ -1002,6 +1002,7 @@ typedef struct zskiplistNode {
     sds ele;
     double score;
     struct zskiplistNode *backward;
+    // lever数组就是用于存储多级索引的，每一个元素就是一级索引
     struct zskiplistLevel {
         struct zskiplistNode *forward;
         unsigned long span;

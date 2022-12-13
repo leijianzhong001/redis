@@ -3466,7 +3466,7 @@ void populateCommandTable(void) {
     int numcommands = sizeof(redisCommandTable)/sizeof(struct redisCommand);
 
     for (j = 0; j < numcommands; j++) {
-        struct redisCommand *c = redisCommandTable+j;
+        struct redisCommand *c = redisCommandT able+j;
         int retval1, retval2;
 
         /* Translate the command string flags description into an actual
@@ -6374,16 +6374,22 @@ int main(int argc, char **argv) {
         /* Parse command line options
          * Precedence wise, File, stdin, explicit options -- last config is the one that matters.
          *
-         * First argument is the config file name? */
+         * First argument is the config file name?
+         * 一般我们指定了配置文件路径的启动命令是这样的 "redis-server /opt/redis/redis.conf"
+         * */
         if (argv[1][0] != '-') {
             /* Replace the config file in server.exec_argv with its absolute path. */
+            // 【7】 如果启动命令的第二个参数不是以"-"开始的,则是配置文件参数，将配置文件路径幻化为绝对路径，存入server.configfile
             server.configfile = getAbsolutePath(argv[1]);
             zfree(server.exec_argv[1]);
             server.exec_argv[1] = zstrdup(server.configfile);
             j = 2; // Skip this arg when parsing options
         }
+
+        // 【8】 读取启动命令中的启动配置项，并将它们拼接到一个字符串options中
         while(j < argc) {
             /* Either first or last argument - Should we read config from stdin? */
+            //
             if (argv[j][0] == '-' && argv[j][1] == '\0' && (j == 1 || j == argc-1)) {
                 config_from_stdin = 1;
             }
@@ -6404,15 +6410,20 @@ int main(int argc, char **argv) {
             j++;
         }
 
+        // 从配置文件中加载所有配置项，并使用启动命令配置项覆盖配置文件中的配置项
         loadServerConfig(server.configfile, config_from_stdin, options);
         if (server.sentinel_mode) loadSentinelConfigFromQueue();
         sdsfree(options);
     }
+
+    // 【9】 如果是以sentinel模式启动，则必须指定配置文件，否则直接报错退出
     if (server.sentinel_mode) sentinelCheckConfigFile();
+    // 【11】 server.supervised指定是否以upstart服务或者systemd服务启动redis, 如果配置了server.daemonize且没有配置server.supervised，则以守护进程的方式启动redis
     server.supervised = redisIsSupervised(server.supervised_mode);
     int background = server.daemonize && !server.supervised;
     if (background) daemonize();
 
+    // 【12】 打印启动日志
     serverLog(LL_WARNING, "oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo");
     serverLog(LL_WARNING,
         "Redis version=%s, bits=%d, commit=%s, modified=%d, pid=%d, just started",
@@ -6429,8 +6440,9 @@ int main(int argc, char **argv) {
     }
 
     readOOMScoreAdj();
+    // 【13】 初始化redis运行时数据
     initServer();
-    if (background || server.pidfile) createPidFile();
+    if (background || server.pidfile) createPidFile(); // 创建pid文件
     if (server.set_proc_title) redisSetProcTitle(NULL);
     redisAsciiArt();
     checkTcpBacklogSettings();
@@ -6458,11 +6470,16 @@ int main(int argc, char **argv) {
     #endif /* __arm64__ */
     #endif /* __linux__ */
         moduleInitModulesSystemLast();
+        // 【14】 加载配置文件指定的module模块
         moduleLoadFromQueue();
+        // 加载acl用户控制列表
         ACLLoadUsersAtStartup();
+        // 创建后台线程，IO线程，该步骤需要在module加载hi后再执行
         InitServerLast();
+        // 从磁盘上加载rdb或aof文件
         loadDataFromDisk();
         if (server.cluster_enabled) {
+            // 如果以cluster模式启动，还需要验证加载的数据是否正确
             if (verifyClusterConfigWithData() == C_ERR) {
                 serverLog(LL_WARNING,
                     "You can't have keys in a DB different than DB 0 when in "
@@ -6484,6 +6501,7 @@ int main(int argc, char **argv) {
         }
     } else {
         ACLLoadUsersAtStartup();
+        //【14】 如果以Sentinel模式启动，则调用sentinelIsRunning函数启动sentinel相关机制
         InitServerLast();
         sentinelIsRunning();
         if (server.supervised_mode == SUPERVISED_SYSTEMD) {
@@ -6497,10 +6515,14 @@ int main(int argc, char **argv) {
         serverLog(LL_WARNING,"WARNING: You specified a maxmemory value that is less than 1MB (current value is %llu bytes). Are you sure this is what you really want?", server.maxmemory);
     }
 
+    //【16】 尽可能将Redis主线程绑定到server.server_cpulist配置的cpu列表上，redis 4以后开始使用多线程，该 操作可以减少不必要的上下文切换，提高性能
     redisSetCpuAffinity(server.server_cpulist);
     setOOMScoreAdj(-1);
 
+    // 【17】 启动事件循环器。事件循环器是redis中的重要组件，在redis运行期间，由事件循环器提供服务
     aeMain(server.el);
+
+    // 【18】 执行到这里，说明redis服务已经停止了，aeDeleteEventLoop函数将清除事件循环器中的事件，最后退出程序
     aeDeleteEventLoop(server.el);
     return 0;
 }
