@@ -2061,11 +2061,14 @@ void commandProcessed(client *c) {
      *    The client will be reset in unblockClient().
      * 2. Don't update replication offset or propagate commands to replicas,
      *    since we have not applied the command. */
+    //
     if (c->flags & CLIENT_BLOCKED) return;
 
+    // 【1】 重置客户端。重置客户端并不会清除client回复缓冲区。所以handleClientSwitch-pendingWrites函数仍然可以读取回复缓冲区的内容
     resetClient(c);
 
     long long prev_offset = c->reploff;
+    // 【2】 如果客户端是主节点客户端，并且客户端不处于事务上下文中，则更新reploff，该属性记录当前服务器已同步命令的偏移量，主要用于主从复制机制
     if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
         /* Update the applied replication offset of our master. */
         c->reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
@@ -2077,6 +2080,7 @@ void commandProcessed(client *c) {
      * applied to the master state: this quantity, and its corresponding
      * part of the replication stream, will be propagated to the
      * sub-replicas and to the replication backlog. */
+    // 【3】 如果客户端是主节点客户端，则调用 replicationFeedSlavesFromMasterStream 函数将接收到的命令继续复制到当前服务器的从节点
     if (c->flags & CLIENT_MASTER) {
         long long applied = c->reploff - prev_offset;
         if (applied) {
@@ -2099,7 +2103,9 @@ int processCommandAndResetClient(client *c) {
     int deadclient = 0;
     client *old_client = server.current_client;
     server.current_client = c;
+    // 执行命令
     if (processCommand(c) == C_OK) {
+        // 命令执行成功之后，调用 commandProcessed 执行后续逻辑
         commandProcessed(c);
     }
     if (server.current_client == NULL) deadclient = 1;

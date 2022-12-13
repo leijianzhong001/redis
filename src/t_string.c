@@ -253,7 +253,9 @@ int parseExtendedStringArgumentsOrReply(client *c, int *flags, int *unit, robj *
 }
 
 /* SET key value [NX] [XX] [KEEPTTL] [GET] [EX <seconds>] [PX <milliseconds>]
- *     [EXAT <seconds-timestamp>][PXAT <milliseconds-timestamp>] */
+ *     [EXAT <seconds-timestamp>][PXAT <milliseconds-timestamp>]
+ *     命令参数是存储在client.argv中的，client.argv[0] 是命令名，后面是执行命令的参数
+ *     */
 void setCommand(client *c) {
     robj *expire = NULL;
     int unit = UNIT_SECONDS;

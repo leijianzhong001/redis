@@ -870,7 +870,7 @@ typedef struct client {
                                the master. */
     size_t querybuf_peak;   /* Recent (100ms or more) peak of querybuf size. */
     int argc;               /* Num of arguments of current command. */
-    robj **argv;            /* Arguments of current command. */
+    robj **argv;            /* Arguments of current command. argv[0]是命令名，后面的都是命令参数*/
     int original_argc;      /* Num of arguments of original command if arguments were rewritten. */
     robj **original_argv;   /* Arguments of original command if arguments were rewritten. */
     size_t argv_len_sum;    /* Sum of lengths of objects in argv list. */
@@ -1648,9 +1648,9 @@ typedef struct {
 typedef void redisCommandProc(client *c);
 typedef int redisGetKeysProc(struct redisCommand *cmd, robj **argv, int argc, getKeysResult *result);
 struct redisCommand {
-    char *name;
-    redisCommandProc *proc;
-    int arity;
+    char *name; // 命令名称，如GET SET DEL等
+    redisCommandProc *proc; // 命令处理函数，负责执行命令的逻辑
+    int arity; // 命令参数数量。注意，命令名称也是一个参数
     char *sflags;   /* Flags as string representation, one char per flag. */
     uint64_t flags; /* The actual flags, obtained from the 'sflags' field. */
     /* Use a function to determine keys arguments in a command line.

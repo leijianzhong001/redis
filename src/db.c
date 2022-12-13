@@ -191,6 +191,7 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
  *
  * The program is aborted if the key already exists. */
 void dbAdd(redisDb *db, robj *key, robj *val) {
+    // 注意这个地方，最后保存key的时候没有直接使用 redisObject对象保存，而是使用的是sds, 只有value是redisObject
     sds copy = sdsdup(key->ptr);
     int retval = dictAdd(db->dict, copy, val);
 
