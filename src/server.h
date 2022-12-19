@@ -223,7 +223,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define AOF_ON 1              /* AOF is on */
 #define AOF_WAIT_REWRITE 2    /* AOF waits rewrite to start appending */
 
-/* Client flags */
+/* 客户端标记 Client flags */
 #define CLIENT_SLAVE (1<<0)   /* This client is a replica */
 #define CLIENT_MASTER (1<<1)  /* This client is a master */
 #define CLIENT_MONITOR (1<<2) /* This client is a slave monitor, see MONITOR */
@@ -862,13 +862,13 @@ typedef struct client {
     int resp;               /* RESP protocol version. Can be 2 or 3. */
     redisDb *db;            /* Pointer to currently SELECTed DB. */
     robj *name;             /* As set by CLIENT SETNAME. */
-    sds querybuf;           /* Buffer we use to accumulate client queries. */
-    size_t qb_pos;          /* The position we have read in querybuf. */
+    sds querybuf;           /* Buffer we use to accumulate client queries.  查询缓冲区，用于存放客户端请求数据*/
+    size_t qb_pos;          /* The position we have read in querybuf.  查询缓冲区的最新读取位置*/
     sds pending_querybuf;   /* If this client is flagged as master, this buffer
                                represents the yet not applied portion of the
                                replication stream that we are receiving from
                                the master. */
-    size_t querybuf_peak;   /* Recent (100ms or more) peak of querybuf size. */
+    size_t querybuf_peak;   /* Recent (100ms or more) peak of querybuf size.  客户端单次读取请求数据量的峰值*/
     int argc;               /* Num of arguments of current command. */
     robj **argv;            /* Arguments of current command. argv[0]是命令名，后面的都是命令参数*/
     int original_argc;      /* Num of arguments of original command if arguments were rewritten. */
@@ -878,11 +878,11 @@ typedef struct client {
     user *user;             /* User associated with this connection. If the
                                user is set to NULL the connection can do
                                anything (admin). */
-    int reqtype;            /* Request protocol type: PROTO_REQ_* */
-    int multibulklen;       /* Number of multi bulk arguments left to read. */
-    long bulklen;           /* Length of bulk argument in multi bulk request. */
-    list *reply;            /* List of reply objects to send to the client. */
-    unsigned long long reply_bytes; /* Tot bytes of objects in reply list. */
+    int reqtype;            /* Request protocol type: PROTO_REQ_*  请求数据协议类型*/
+    int multibulklen;       /* Number of multi bulk arguments left to read.  当前解析的命令请求中尚未处理的命令参数数量*/
+    long bulklen;           /* Length of bulk argument in multi bulk request. 当前读取命令参数长度*/
+    list *reply;            /* List of reply objects to send to the client. 链表回复缓冲区（动态输出缓冲区）用于存放redis返回给用户的响应数据*/
+    unsigned long long reply_bytes; /* Tot bytes of objects in reply list. 链表回复缓冲区字节数*/
     list *deferred_reply_errors;    /* Used for module thread safe contexts. */
     size_t sentlen;         /* Amount of bytes already sent in the current
                                buffer or object being sent. */
@@ -890,7 +890,7 @@ typedef struct client {
     long duration;          /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     time_t lastinteraction; /* Time of the last interaction, used for timeout */
     time_t obuf_soft_limit_reached_time;
-    uint64_t flags;         /* Client flags: CLIENT_* macros. */
+    uint64_t flags;         /* Client flags: CLIENT_* macros. 客户端标志*/
     int authenticated;      /* Needed when the default user requires auth. */
     int replstate;          /* Replication state if this is a slave. */
     int repl_put_online_on_ack; /* Install slave write handler on first ACK. */
@@ -946,8 +946,8 @@ typedef struct client {
     uint64_t client_cron_last_memory_usage;
     int      client_cron_last_memory_type;
     /* Response buffer */
-    int bufpos;
-    char buf[PROTO_REPLY_CHUNK_BYTES];
+    int bufpos; // 固定输出缓冲区的读取位置
+    char buf[PROTO_REPLY_CHUNK_BYTES]; // 固定输出缓冲区
 } client;
 
 struct saveparam {
@@ -999,20 +999,20 @@ struct sharedObjectsStruct {
 
 /* ZSETs use a specialized version of Skiplists */
 typedef struct zskiplistNode {
-    sds ele;
-    double score;
-    struct zskiplistNode *backward;
+    sds ele;  // 成员对象 4~18
+    double score; // 成员对象分值 8
+    struct zskiplistNode *backward; // 后退节点的指针，一个节点只有第一层（最底下那一层）有后退结点指针，所以zskiplist中的第一层是一个双向链表 8
     // lever数组就是用于存储多级索引的，每一个元素就是一级索引
     struct zskiplistLevel {
-        struct zskiplistNode *forward;
-        unsigned long span;
+        struct zskiplistNode *forward; // 本层前进节点指针 8
+        unsigned long span; // 本层的后继节点（forward前进指针指向的就是后继节点）跨越了多少个第一层节点，用于计算节点索引值。这个值其实就是距离头节点的偏移量，从0开始计算，每个节点递增1   8
     } level[];
 } zskiplistNode;
 
 typedef struct zskiplist {
-    struct zskiplistNode *header, *tail;
-    unsigned long length;
-    int level;
+    struct zskiplistNode *header, *tail; // 表头节点和表尾结点 16
+    unsigned long length; // 表中节点的数量 8
+    int level; // 表中节点的最大层数 4
 } zskiplist;
 
 typedef struct zset {

@@ -114,7 +114,7 @@ typedef struct quicklistBookmark {
  * 'count' 是条目总数。
  * 'len' 是快速列表节点的数量。
  * 'compress' 如果禁用压缩，则为 0，否则它是在快速列表末尾保持未压缩的快速列表节点数。
- * 'fill' 是用户请求的（或默认）填充因子。
+ * 'fill' 是用户请求的（或默认）填充因子。控制ziplist大小的，也就是QuickListNode大小
  * 'bookmakrs 是 realloc 这个结构使用的可选功能，这样它们在不使用时就不会消耗内存。
  *  */
 typedef struct quicklist {

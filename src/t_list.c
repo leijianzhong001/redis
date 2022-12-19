@@ -226,6 +226,7 @@ robj *listTypeDup(robj *o) {
 void pushGenericCommand(client *c, int where, int xx) {
     int j;
 
+    // lpush mylist 1 2 3
     for (j = 2; j < c->argc; j++) {
         if (sdslen(c->argv[j]->ptr) > LIST_MAX_ITEM_SIZE) {
             addReplyError(c, "Element too large");
@@ -233,6 +234,7 @@ void pushGenericCommand(client *c, int where, int xx) {
         }
     }
 
+    // 找到当前到push的list对象
     robj *lobj = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c,lobj,OBJ_LIST)) return;
     if (!lobj) {

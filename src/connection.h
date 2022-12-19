@@ -53,6 +53,7 @@ typedef enum {
 
 typedef void (*ConnectionCallbackFunc)(struct connection *conn);
 
+// ConnectionType 结构体包含操作连接通道的函数，如connect、read、write 。 redis将与连接相关的逻辑都封装到 connection 中， ConnectionType 是操作连接的API. redis通过ConnectionType提供的函数操作连接，而不是直接操作连接
 typedef struct ConnectionType {
     void (*ae_handler)(struct aeEventLoop *el, int fd, void *clientData, int mask);
     int (*connect)(struct connection *conn, const char *addr, int port, const char *source_addr, ConnectionCallbackFunc connect_handler);
@@ -70,16 +71,17 @@ typedef struct ConnectionType {
     int (*get_type)(struct connection *conn);
 } ConnectionType;
 
+// connection结构体负责存储每个连接的相关信息
 struct connection {
-    ConnectionType *type;
-    ConnectionState state;
+    ConnectionType *type; // ConnectionType 结构体包含操作连接通道的函数，如connect、read、write 。 redis将与连接相关的逻辑都封装到 connection 中， ConnectionType 是操作连接的API. redis通过ConnectionType提供的函数操作连接，而不是直接操作连接
+    ConnectionState state; // ConnectionState 结构体定义连接的状态，包括 CONN_STATE_CONNECTING、CONN_STATE_ACCEPTING、CONN_STATE_CONNECTED、CONN_STATE_CLOSED、CONN_STATE_ERROR
     short int flags;
     short int refs;
     int last_errno;
-    void *private_data;
-    ConnectionCallbackFunc conn_handler;
-    ConnectionCallbackFunc write_handler;
-    ConnectionCallbackFunc read_handler;
+    void *private_data; // 用于存放附加数据，如client
+    ConnectionCallbackFunc conn_handler; // 执行连接操作的回调函数
+    ConnectionCallbackFunc write_handler; // 执行写入操作的回调函数
+    ConnectionCallbackFunc read_handler; // 执行读取操作的回调函数
     int fd;
 };
 

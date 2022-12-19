@@ -120,12 +120,16 @@ void zslFree(zskiplist *zsl) {
  * (both inclusive), with a powerlaw-alike distribution where higher
  * levels are less likely to be returned. */
 int zslRandomLevel(void) {
+    // 注意这里初始值时1，所以必然会生成1层索引
     int level = 1;
+    // random()函数返回0~rand_max的随机数，(random()&0xFFFF)小于等于0xFFFF。而 ZSKIPLIST_P为0.25， 则函数中while语句继续执行（增加层数）的概率为0.25,也就是从概率上将，k层节点的数量是k+1层节点的4倍。
+    // 所以，redis的skiplist从概率上讲，相当于一颗4叉树
     while ((random()&0xFFFF) < (ZSKIPLIST_P * 0xFFFF))
         level += 1;
     return (level<ZSKIPLIST_MAXLEVEL) ? level : ZSKIPLIST_MAXLEVEL;
 }
 
+// zslInsert 方法负责插入一个新的元素
 /* Insert a new node in the skiplist. Assumes the element does not already
  * exist (up to the caller to enforce that). The skiplist takes ownership
  * of the passed SDS string 'ele'. */
@@ -135,10 +139,12 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele) {
     int i, level;
 
     serverAssert(!isnan(score));
+    // 【1】 查找每层插入位置的前驱结点（就是插入位置的前一个节点）。update数组记录了每层插入位置的前驱结点。 rank数组记录了每层插入位置的前驱节点的分值
     x = zsl->header;
     for (i = zsl->level-1; i >= 0; i--) {
         /* store rank that is crossed to reach the insert position */
         rank[i] = i == (zsl->level-1) ? 0 : rank[i+1];
+        // 当前节点有后驱节点并且后驱节点的分值小于当前插入的分值，则推进都后驱节点，否则退出循环
         while (x->level[i].forward &&
                 (x->level[i].forward->score < score ||
                     (x->level[i].forward->score == score &&
@@ -153,18 +159,26 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele) {
      * scores, reinserting the same element should never happen since the
      * caller of zslInsert() should test in the hash table if the element is
      * already inside or not. */
+    // 【2】 随机生成新节点的层数。 生成的level的值越大，概率越低。具体来讲，假如跳表有k个元素，那么跳表的第一层索引就有k个， 而随着元素的插入，从概率上讲，只有25%的元素能够在这里生成第二层索引（即level的值为2），第三层以此类推
     level = zslRandomLevel();
+    // 【3】 新节点的层数比其他节点都大，这时skiplist需要添加新的层
+    // 由于头节点层数需要大于或等于其他节点层数，所以这是需要在头节点中添加新的层，头节点新增层的span为skiplist的节点数量（rank最大值）
+    // 创建skiplist时,已经为头节点预先分配了 ZSKIPLIST_MAXLEVEL 层内存大小，这里不需要再次分配内存
     if (level > zsl->level) {
+        // 注意这里的i是从 zsl->level 处开始的，所以这个循环只递增新增的层数
         for (i = zsl->level; i < level; i++) {
             rank[i] = 0;
             update[i] = zsl->header;
-            update[i]->level[i].span = zsl->length;
+            update[i]->level[i].span = zsl->length; // 头节点新增层的span为skiplist的节点数量（rank最大值）
         }
         zsl->level = level;
     }
+    // 【4】 创建一个新节点。具体为遍历各层，插入新节点并更新前后节点的属性。
     x = zslCreateNode(level,score,ele);
     for (i = 0; i < level; i++) {
+        // 新节点的i层的前驱节点就是前面update数组中记录的值
         x->level[i].forward = update[i]->level[i].forward;
+        // 新节点x成为之前记录的前驱结点的前驱节点
         update[i]->level[i].forward = x;
 
         /* update span covered by update[i] as x is inserted here */
@@ -172,11 +186,13 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele) {
         update[i]->level[i].span = (rank[0] - rank[i]) + 1;
     }
 
+    // 【5】 如果某个节点存在比新节点层数相同或更大的层，则其前驱结点span需要+1，因为第一层插入了一个新节点
     /* increment span for untouched levels */
     for (i = level; i < zsl->level; i++) {
         update[i]->level[i].span++;
     }
 
+    // 【6】 设置新节点的前驱节点backward属性，更新skiplist.length属性。
     x->backward = (update[0] == zsl->header) ? NULL : update[0];
     if (x->level[0].forward)
         x->level[0].forward->backward = x;
@@ -501,13 +517,18 @@ zskiplistNode* zslGetElementByRank(zskiplist *zsl, unsigned long rank) {
     unsigned long traversed = 0;
     int i;
 
+    // 头节点
     x = zsl->header;
+    // 【1】 从头节点的最高层开始查找 zsl->level 代表skiplist中层数最大的节点的层数
     for (i = zsl->level-1; i >= 0; i--) {
+        // 【2】 如果存在后驱节点，并且后驱节点的的索引小于目标值。每次使用 forward 跳转到后驱节点，traversed变量都需要加上span, 得到下一个节点的索引
+        // 注意: rank 值指的是排名，不是具体的分值
         while (x->level[i].forward && (traversed + x->level[i].span) <= rank)
         {
             traversed += x->level[i].span;
             x = x->level[i].forward;
         }
+        // 【3】 如果节点索引等于目标值，则返回该节点。否则下降一层继续查找，直到在第一层查找成功或失败
         if (traversed == rank) {
             return x;
         }
@@ -1716,6 +1737,7 @@ void zsetTypeRandomElement(robj *zsetobj, unsigned long zsetsize, ziplistEntry *
  * Sorted set commands
  *----------------------------------------------------------------------------*/
 
+// zadd goland 1 a 2 b 3 c
 /* This generic command implements both ZADD and ZINCRBY. */
 void zaddGenericCommand(client *c, int flags) {
     static char *nanerr = "resulting score is not a number (NaN)";

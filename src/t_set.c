@@ -40,8 +40,10 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum,
  * an integer-encodable value, an intset will be returned. Otherwise a regular
  * hash table. */
 robj *setTypeCreate(sds value) {
+    // 如果可以转为long long类型，则创建intset对象
     if (isSdsRepresentableAsLongLong(value,NULL) == C_OK)
         return createIntsetObject();
+    // 否则的话创建hashtable对象
     return createSetObject();
 }
 
@@ -300,10 +302,13 @@ robj *setTypeDup(robj *o) {
     return set;
 }
 
+// sadd goland a b c d e
 void saddCommand(client *c) {
     robj *set;
     int j, added = 0;
 
+    // 如果当前key第一次sadd，这里返回null
+    // c->argv[1] 是key的名称
     set = lookupKeyWrite(c->db,c->argv[1]);
     if (checkType(c,set,OBJ_SET)) return;
     
@@ -312,6 +317,7 @@ void saddCommand(client *c) {
         dbAdd(c->db,c->argv[1],set);
     }
 
+    // a b c d e
     for (j = 2; j < c->argc; j++) {
         if (setTypeAdd(set,c->argv[j]->ptr)) added++;
     }

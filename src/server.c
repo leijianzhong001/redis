@@ -3325,6 +3325,7 @@ void initServer(void) {
 
     /* Create an event handler for accepting new connections in TCP and Unix
      * domain sockets. */
+    // 为socket连接server.ipfd注册AE_READABLE文件事件的回调函数 acceptTcpHandler，该函数负责接收客户端连接，创建数据交换套接字，并为数据套接字注册文件事件回调函数
     if (createSocketAcceptHandler(&server.ipfd, acceptTcpHandler) != C_OK) {
         serverPanic("Unrecoverable error creating TCP socket accept handler.");
     }

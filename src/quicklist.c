@@ -411,9 +411,15 @@ _quicklistNodeSizeMeetsOptimizationRequirement(const size_t sz,
     if (fill >= 0)
         return 0;
 
+    // fill为-2， 那么offset就是1
     size_t offset = (-fill) - 1;
+    // sizeof(optimization_level) 获取optimization_level数组长度 40
+    // sizeof(*optimization_level) 获取指针长度 8
+    // sizeof(optimization_level) / sizeof(*optimization_level) = 5
     if (offset < (sizeof(optimization_level) / sizeof(*optimization_level))) {
+        // optimization_level[1] = 8192
         if (sz <= optimization_level[offset]) {
+            // 长度小于8k
             return 1;
         } else {
             return 0;
@@ -425,6 +431,7 @@ _quicklistNodeSizeMeetsOptimizationRequirement(const size_t sz,
 
 #define sizeMeetsSafetyLimit(sz) ((sz) <= SIZE_SAFETY_LIMIT)
 
+// sz就是实际字符串的长度
 REDIS_STATIC int _quicklistNodeAllowInsert(const quicklistNode *node,
                                            const int fill, const size_t sz) {
     if (unlikely(!node))
@@ -437,7 +444,14 @@ REDIS_STATIC int _quicklistNodeAllowInsert(const quicklistNode *node,
     else
         ziplist_overhead = 5;
 
-    /* size of forward offset */
+    /* size of forward offset
+     * ziplist的字符串编码方式
+     *  | **编码**                                         | **编码长度** | **字符串大小**          |
+     *  | ------------------------------------------------ | ------------ | ----------------------- |
+     *  | `|00pppppp|`                                     | **1 bytes**  | **<= 63 bytes**         |
+     *  | `|01pppppp|qqqqqqqq|`                            | **2 bytes**  | **<= 16383 bytes**      |
+     *  | `|10000000|qqqqqqqq|rrrrrrrr|ssssssss|tttttttt|` | **5 bytes**  | **<= 4294967295 bytes** |
+     * */
     if (sz < 64)
         ziplist_overhead += 1;
     else if (likely(sz < 16384))
@@ -494,10 +508,12 @@ int quicklistPushHead(quicklist *quicklist, void *value, size_t sz) {
     assert(sz < UINT32_MAX); /* TODO: add support for quicklist nodes that are sds encoded (not zipped) */
     if (likely(
             _quicklistNodeAllowInsert(quicklist->head, quicklist->fill, sz))) {
+        // 如果头节点允许插入，就直接插入到头节点的ziplist中
         quicklist->head->zl =
             ziplistPush(quicklist->head->zl, value, sz, ZIPLIST_HEAD);
         quicklistNodeUpdateSz(quicklist->head);
     } else {
+        // 否则的话，创建一个新的 quicklistNode
         quicklistNode *node = quicklistCreateNode();
         node->zl = ziplistPush(ziplistNew(), value, sz, ZIPLIST_HEAD);
 

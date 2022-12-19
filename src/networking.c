@@ -116,6 +116,7 @@ int authRequired(client *c) {
     return auth_required;
 }
 
+// createClient 为每个连接创建对应的client结构体
 client *createClient(connection *conn) {
     client *c = zmalloc(sizeof(client));
 
@@ -123,15 +124,24 @@ client *createClient(connection *conn) {
      * This is useful since all the commands needs to be executed
      * in the context of a client. When commands are executed in other
      * contexts (for instance a Lua script) we need a non connected client. */
+    // 【1】如果conn为null， 则创建伪客户端。 伪客户端很有用，因为Redis的所有命令都必须在client上下文中执行，当命令在其他上下文环境中执行时（如lua脚本），就需要创建一个伪客户端
     if (conn) {
+        // 将文件描述符设置位非阻塞模式
         connNonBlock(conn);
+        // connEnableTcpNoDelay 函数关闭tco Delay选项
         connEnableTcpNoDelay(conn);
         if (server.tcpkeepalive)
+            // connKeepAlive 函数开启tco的keepAlive选项，服务器定时向空闲客户端发送ack进行探测
             connKeepAlive(conn,server.tcpkeepalive);
+        // connSetReadHandler 为数据套接字注册AE_READABLE文件事件处理函数 readQueryFromClient 。 connSetReadHandler 函数中会调用 conn.type->set_read_handler函数给连接注册回调函数
+        // 当连接的readable事件就绪之后，将触发 readQueryFromClient 函数
+        // readQueryFromClient 函数负责读取客户端发送的请求数据
         connSetReadHandler(conn, readQueryFromClient);
+        // connSetPrivateData 函数负责将客户端对象c赋给conn.private_data属性
         connSetPrivateData(conn, c);
     }
 
+    // 【2】 选择0号库并初始化client属性
     selectDb(c,0);
     uint64_t client_id;
     atomicGetIncr(server.next_client_id, client_id, 1);
@@ -199,7 +209,9 @@ client *createClient(connection *conn) {
     c->auth_module = NULL;
     listSetFreeMethod(c->pubsub_patterns,decrRefCountVoid);
     listSetMatchMethod(c->pubsub_patterns,listMatchObjects);
+    // 【3】 linkClient 函数将client添加到 server.clients、server.clients_index中
     if (conn) linkClient(c);
+    // initClientMultiState 初始化client事务上下文
     initClientMultiState(c);
     return c;
 }
@@ -1044,6 +1056,7 @@ int clientHasPendingReplies(client *c) {
     return c->bufpos || listLength(c->reply);
 }
 
+// clientAcceptHandler 主要检查服务器是否开始protected模式，如果开启了保护模式且客户端连接没有满足要求，则返回错误信息并关闭客户端
 void clientAcceptHandler(connection *conn) {
     client *c = connGetPrivateData(conn);
 
@@ -1105,6 +1118,7 @@ void clientAcceptHandler(connection *conn) {
 }
 
 #define MAX_ACCEPTS_PER_CALL 1000
+// acceptCommonHandler 函数执行连接建立后的逻辑，如创建client结构体、为数据套接字注册文件事件回调函数
 static void acceptCommonHandler(connection *conn, int flags, char *ip) {
     client *c;
     char conninfo[100];
@@ -1124,6 +1138,7 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
      * Admission control will happen before a client is created and connAccept()
      * called, because we don't want to even start transport-level negotiation
      * if rejected. */
+    // 【1】 如果client数量加上Cluster用于消息总线连接的数量已经超过了 server.maxclients 配置项，则返回错误并关闭连接
     if (listLength(server.clients) + getClusterConnectionsCount()
         >= server.maxclients)
     {
@@ -1145,6 +1160,7 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
         return;
     }
 
+    // 【2】创建client结构体，存储客户端数据
     /* Create connection and client */
     if ((c = createClient(conn)) == NULL) {
         serverLog(LL_WARNING,
@@ -1166,6 +1182,7 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
      *
      * Because of that, we must do nothing else afterwards.
      */
+    // 设置clientAcceptHandler为accept的回调函数。该函数会被立即调用，他主要检查服务器是否开始protected模式，如果开启了保护模式且客户端连接没有满足要求，则返回错误信息并关闭客户端
     if (connAccept(conn, clientAcceptHandler) == C_ERR) {
         char conninfo[100];
         if (connGetState(conn) == CONN_STATE_ERROR)
@@ -1177,6 +1194,7 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
     }
 }
 
+// 该函数负责接收客户端连接，创建数据交换套接字，并为数据套接字注册文件事件回调函数
 void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     int cport, cfd, max = MAX_ACCEPTS_PER_CALL;
     char cip[NET_IP_STR_LEN];
@@ -1184,7 +1202,10 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(mask);
     UNUSED(privdata);
 
+    // 【1】 每次事件循环最多接收 1000 个客户端请求，方式短时间内处理过多客户请求导致工作线程阻塞
     while(max--) {
+        // 【2】 anetTcpAccept函数会调用C语言的accept函数接收新的客户端连接，并返回数据套接字文件描述符。
+        // 如果当前没有待处理的连接请求，则该函数返回 ANET_ERR, 这时会退出函数。如果有新的请求进来时，Redis事件循环器会重新调用 acceptTcpHandler 函数
         cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
         if (cfd == ANET_ERR) {
             if (errno != EWOULDBLOCK)
@@ -1194,6 +1215,7 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         }
         anetCloexec(cfd);
         serverLog(LL_VERBOSE,"Accepted %s:%d", cip, cport);
+        // connCreateAcceptedSocket 创建并返回 connection 结构体。
         acceptCommonHandler(connCreateAcceptedSocket(cfd),0,cip);
     }
 }
@@ -1394,6 +1416,7 @@ void freeClient(client *c) {
      *
      * Note that before doing this we make sure that the client is not in
      * some unexpected state, by checking its flags. */
+    // 如果客户端是一个redis master节点（说明是当前节点的主节点），则缓存该客户端信息，并将主从状态置为待连接状态，以便后续与主节点重新建立连接。
     if (server.master && c->flags & CLIENT_MASTER) {
         serverLog(LL_WARNING,"Connection with master lost.");
         if (!(c->flags & (CLIENT_PROTOCOL_ERROR|CLIENT_BLOCKED))) {
@@ -1409,6 +1432,7 @@ void freeClient(client *c) {
             replicationGetSlaveName(c));
     }
 
+    // 释放查询缓冲区
     /* Free the query buffer */
     sdsfree(c->querybuf);
     sdsfree(c->pending_querybuf);
@@ -1422,6 +1446,7 @@ void freeClient(client *c) {
     unwatchAllKeys(c);
     listRelease(c->watched_keys);
 
+    // 取消所有的pubsub订阅
     /* Unsubscribe from all the pubsub channels */
     pubsubUnsubscribeAllChannels(c,0);
     pubsubUnsubscribeAllPatterns(c,0);
@@ -1438,8 +1463,10 @@ void freeClient(client *c) {
     /* Unlink the client: this will close the socket, remove the I/O
      * handlers, and remove references of the client from different
      * places where active clients may be referenced. */
+    // 关闭socket连接
     unlinkClient(c);
 
+    // 如果客户端是从节点客户端，则将其从server.monitors 或 server.slaves中剔除，并减少 server.repl_good_slaves_count 计数
     /* Master/slave cleanup Case 1:
      * we lost the connection with a slave. */
     if (c->flags & CLIENT_SLAVE) {
@@ -1890,6 +1917,7 @@ static void setProtocolError(const char *errstr, client *c) {
     c->flags |= (CLIENT_CLOSE_AFTER_REPLY|CLIENT_PROTOCOL_ERROR);
 }
 
+// processMultibulkBuffer 函数从查询缓冲区的数据中解析请求报文，获取命令名及命令参数
 /* Process the query buffer for client 'c', setting up the client argument
  * vector for command execution. Returns C_OK if after running the function
  * the client has a well-formed ready to be processed command, otherwise
@@ -1906,6 +1934,7 @@ int processMultibulkBuffer(client *c) {
     int ok;
     long long ll;
 
+    // multibulklen == 0代表上一个命令请求数据以解析完全，这里开始解析一个新的命令请求。通过\r\n分隔符从当前请求数据中解析当前命令参数数量（在`RESP`中，协议的不同部分始终以“\r\n”（CRLF）结束），赋值给 multibulklen
     if (c->multibulklen == 0) {
         /* The client should have been reset */
         serverAssertWithInfo(c,NULL,c->argc == 0);
@@ -1951,9 +1980,11 @@ int processMultibulkBuffer(client *c) {
     }
 
     serverAssertWithInfo(c,NULL,c->multibulklen > 0);
+    // 【2】 读取当前命令的所有参数，multibulklen为当前解析的命令请求中尚未被处理的命令参数的个数
     while(c->multibulklen) {
         /* Read bulk length if unknown */
         if (c->bulklen == -1) {
+            // 通过\r\n分隔符读取当前参数长度，赋值给 bulklen   c->querybuf+c->qb_pos 是地址运算，意思是取querybuf起始地址+qb_pos长度
             newline = strchr(c->querybuf+c->qb_pos,'\r');
             if (newline == NULL) {
                 if (sdslen(c->querybuf)-c->qb_pos > PROTO_INLINE_MAX_SIZE) {
@@ -1990,6 +2021,7 @@ int processMultibulkBuffer(client *c) {
             }
 
             c->qb_pos = newline-c->querybuf+2;
+            // 【4】 如果当前参数是一个超大参数，则执行以下优化操作
             if (ll >= PROTO_MBULK_BIG_ARG) {
                 /* If we are going to read a large object from network
                  * try to make it likely that it will start at c->querybuf
@@ -2001,16 +2033,19 @@ int processMultibulkBuffer(client *c) {
                  * ll+2, trimming querybuf is just a waste of time, because
                  * at this time the querybuf contains not only our bulk. */
                 if (sdslen(c->querybuf)-c->qb_pos <= (size_t)ll+2) {
+                    // 清除查询缓冲区中其他已处理的数据，确保查询缓冲区中只有当前请求参数数据
                     sdsrange(c->querybuf,c->qb_pos,-1);
                     c->qb_pos = 0;
                     /* Hint the sds library about the amount of bytes this string is
                      * going to contain. */
+                    // 对查询缓冲区进行扩容，确保他可以容纳当前参数
                     c->querybuf = sdsMakeRoomFor(c->querybuf,ll+2-sdslen(c->querybuf));
                 }
             }
             c->bulklen = ll;
         }
 
+        // 【5】 当前查询缓冲区字符串长度小于当前参数长度，说明当前参数并没有读取完整，退出函数，等待下次 readQueryFromClient 函数被调用后继续读取剩余数据
         /* Read bulk argument */
         if (sdslen(c->querybuf)-c->qb_pos < (size_t)(c->bulklen+2)) {
             /* Not enough data (+2 == trailing \r\n) */
@@ -2019,6 +2054,7 @@ int processMultibulkBuffer(client *c) {
             /* Optimization: if the buffer contains JUST our bulk element
              * instead of creating a new object by *copying* the sds we
              * just use the current sds string. */
+            // 如果读取的是超大参数，则直接使用查询缓冲区创建一个redisObject作为参数（redisObject的ptr指向查询缓冲区），并申请新的内存空间作为查询缓冲区。
             if (c->qb_pos == 0 &&
                 c->bulklen >= PROTO_MBULK_BIG_ARG &&
                 sdslen(c->querybuf) == (size_t)(c->bulklen+2))
@@ -2028,9 +2064,11 @@ int processMultibulkBuffer(client *c) {
                 sdsIncrLen(c->querybuf,-2); /* remove CRLF */
                 /* Assume that if we saw a fat argument we'll see another one
                  * likely... */
+                // 申请新的内存空间作为查询缓冲区。
                 c->querybuf = sdsnewlen(SDS_NOINIT,c->bulklen+2);
                 sdsclear(c->querybuf);
             } else {
+                // 【7】 如果读取的是非超大参数，则调用 createStringObject 函数复制查询缓冲区中的数据,并创建一个redisObject作为参数
                 c->argv[c->argc++] =
                     createStringObject(c->querybuf+c->qb_pos,c->bulklen);
                 c->argv_len_sum += c->bulklen;
@@ -2041,9 +2079,11 @@ int processMultibulkBuffer(client *c) {
         }
     }
 
+    // 【8】 c->multibulklen == 0戴白哦当前请求参数已被完全读取，返回 C_OK， 这种情况下返回 C_OK 到 processInputBuffer 后会执行命令；
     /* We're done when c->multibulk == 0 */
     if (c->multibulklen == 0) return C_OK;
 
+    // 否则返回 C_ERR， 这时需要 readQueryFromClient 函数下次执行时继续读取数据
     /* Still not ready to process the command */
     return C_ERR;
 }
@@ -2143,20 +2183,25 @@ int processPendingCommandsAndResetClient(client *c) {
  * pending query buffer, already representing a full command, to process. */
 void processInputBuffer(client *c) {
     /* Keep processing while there is something in the input buffer */
+    // 【1】 client.qb_pos 为查询缓冲区的最新读取位置，该位置小于查询缓冲区内容长度时，while循环继续执行
     while(c->qb_pos < sdslen(c->querybuf)) {
+        // 当前客户端处于阻塞状态，直接退出
         /* Immediately abort if the client is in the middle of something. */
         if (c->flags & CLIENT_BLOCKED) break;
 
+        // 解析数据任务移交给IO线程，直接退出
         /* Don't process more buffers from clients that have already pending
          * commands to execute in c->argv. */
         if (c->flags & CLIENT_PENDING_COMMAND) break;
 
+        // 客户端是主节点客户端，并且当前服务器处于lua脚本超时状态，直接退出
         /* Don't process input from the master while there is a busy script
          * condition on the slave. We want just to accumulate the replication
          * stream (instead of replying -BUSY like we do with other clients) and
          * later resume the processing. */
         if (server.lua_timedout && c->flags & CLIENT_MASTER) break;
 
+        // 客户端标志中存在CLIENT_CLOSE_AFTER_REPLY和CLIENT_CLOSE_ASAP，不再执行命令，尽快关闭客户端
         /* CLIENT_CLOSE_AFTER_REPLY closes the connection once the reply is
          * written to the client. Make sure to not let the reply grow after
          * this flag has been set (i.e. don't process more commands).
@@ -2164,11 +2209,14 @@ void processInputBuffer(client *c) {
          * The same applies for clients we want to terminate ASAP. */
         if (c->flags & (CLIENT_CLOSE_AFTER_REPLY|CLIENT_CLOSE_ASAP)) break;
 
+        // 【3】 请求数据类型未确认，代表当前解析的是一个新的命令请求，因此需要再这里判断请求的数据类型。
         /* Determine request type when unknown. */
         if (!c->reqtype) {
+            // RESP协议请求以*开头，类型为 PROTO_REQ_MULTIBULK 。
             if (c->querybuf[c->qb_pos] == '*') {
                 c->reqtype = PROTO_REQ_MULTIBULK;
             } else {
+                // 非 * 开头的数据判定为 PROTO_REQ_INLINE 协议类型，该类型用于支持telnet客户端发送的请求
                 c->reqtype = PROTO_REQ_INLINE;
             }
         }
@@ -2188,6 +2236,8 @@ void processInputBuffer(client *c) {
                 break;
             }
         } else if (c->reqtype == PROTO_REQ_MULTIBULK) {
+            // 【4】 调用 processMultibulkBuffer 函数从请求报文中解析命令参数（命令名即第一个命令参数）。该函数如果返回C_OK，则代表当前命令已经完全读取，可以执行命令
+            // 否则就是tcp拆包场景，直接返回,时间循环器会再次调用 readQueryFromClient 继续读取该命令的剩余参数
             if (processMultibulkBuffer(c) != C_OK) break;
         } else {
             serverPanic("Unknown request type");
@@ -2205,6 +2255,7 @@ void processInputBuffer(client *c) {
                 break;
             }
 
+            // 【5】 解析参数到c.argv中在以后，开始执行命令
             /* We are finally ready to execute the command. */
             if (processCommandAndResetClient(c) == C_ERR) {
                 /* If the client is no longer valid, we avoid exiting this
@@ -2215,6 +2266,7 @@ void processInputBuffer(client *c) {
         }
     }
 
+    // 【7】 执行到这里，说明命令已经执行成功，抛弃查询缓冲区中已处理的命令请求报文
     /* Trim to pos */
     if (c->qb_pos) {
         sdsrange(c->querybuf,c->qb_pos,-1);
@@ -2222,18 +2274,23 @@ void processInputBuffer(client *c) {
     }
 }
 
+// readQueryFromClient 负责读取请求数据
 void readQueryFromClient(connection *conn) {
+    // 【1】 从conn中读取client
     client *c = connGetPrivateData(conn);
     int nread, readlen;
     size_t qblen;
 
     /* Check if we want to read from the client later when exiting from
      * the event loop. This is the case if threaded I/O is enabled. */
+    // 【2】 如果开启了IO线程(redis 6以后的io多线程)，则交给IO线程读取并解析请求数据，该函数直接返回
+    // postpone 函数会将当前客户端添加到server.clients_pending_read中，等待io线程处理
     if (postponeClientRead(c)) return;
 
     /* Update total number of reads on server */
     atomicIncr(server.stat_total_reads_processed, 1);
 
+    // 【3】 为读取请求最大字节数，默认为 16KB
     readlen = PROTO_IOBUF_LEN;
     /* If this is a multi bulk request, and we are processing a bulk reply
      * that is large enough, try to maximize the probability that the query
@@ -2241,19 +2298,26 @@ void readQueryFromClient(connection *conn) {
      * at the risk of requiring more read(2) calls. This way the function
      * processMultiBulkBuffer() can avoid copying buffers to create the
      * Redis Object representing the argument. */
+    // 【4】 如果当前读取的是超大参数，则需要保证查询缓冲区只有当前参数数据
+    // 超大参数即长度大于PROTO_MBULK_BIG_ARG(32K)的参数
+    // multibulklen不为0， 代表发生了tcp拆包，readQueryFromClient函数上一次并没有读取一个完整的命令请求（读取到完整的命令请求会将c->multibulklen置为0）
     if (c->reqtype == PROTO_REQ_MULTIBULK && c->multibulklen && c->bulklen != -1
         && c->bulklen >= PROTO_MBULK_BIG_ARG)
     {
+        // sdslen(c->querybuf) 标识当前查询缓冲区的长度，也就是之前已经读取到的请求参数
         ssize_t remaining = (size_t)(c->bulklen+2)-sdslen(c->querybuf);
 
         /* Note that the 'remaining' variable may be zero in some edge case,
          * for example once we resume a blocked client after CLIENT PAUSE. */
+        // 如果这时读取的是超大参数，并且该参数剩余字节数小于readlen， 则只读取当前参数剩余字节数，从而保证查询缓冲区中只有当前参数数据
         if (remaining > 0 && remaining < readlen) readlen = remaining;
     }
 
+    // 【5】 更新单次读取数据量峰值client.querybuf_peak, 再调用sdsMakeRoomFor函数扩容查询缓冲区，保证其可用内存不小于读取字节数readlen
     qblen = sdslen(c->querybuf);
     if (c->querybuf_peak < qblen) c->querybuf_peak = qblen;
     c->querybuf = sdsMakeRoomFor(c->querybuf, readlen);
+    // 最后调用 connRead 函数从Socket中读取数据，该函数返回实际读取的字节数
     nread = connRead(c->conn, c->querybuf+qblen, readlen);
     if (nread == -1) {
         if (connGetState(conn) == CONN_STATE_CONNECTED) {
@@ -2277,6 +2341,7 @@ void readQueryFromClient(connection *conn) {
 
     sdsIncrLen(c->querybuf,nread);
     c->lastinteraction = server.unixtime;
+    // 【6】 如果客户端是主节点客户端，那么更新client.read_reploff, 该变量用于主从同步机制
     if (c->flags & CLIENT_MASTER) c->read_reploff += nread;
     atomicIncr(server.stat_net_input_bytes, nread);
     if (sdslen(c->querybuf) > server.client_max_querybuf_len) {
@@ -2292,6 +2357,7 @@ void readQueryFromClient(connection *conn) {
 
     /* There is more data in the client input buffer, continue parsing it
      * in case to check if there is a full command to execute. */
+    // 【7】 处理读取的数据
      processInputBuffer(c);
 }
 
