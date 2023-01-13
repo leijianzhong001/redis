@@ -1016,8 +1016,8 @@ typedef struct zskiplist {
 } zskiplist;
 
 typedef struct zset {
-    dict *dict;
-    zskiplist *zsl;
+    dict *dict; // 8
+    zskiplist *zsl; // 8
 } zset;
 
 typedef struct clientBufferLimitsConfig {

@@ -870,6 +870,8 @@ REDIS_STATIC quicklistNode *_quicklistSplitNode(quicklistNode *node, int offset,
  * the new value is inserted before 'entry'. */
 REDIS_STATIC void _quicklistInsert(quicklist *quicklist, quicklistEntry *entry,
                                    void *value, const size_t sz, int after) {
+    // *value 插入元素的内容
+    // sz 插入元素的大小
     int full = 0, at_tail = 0, at_head = 0, full_next = 0, full_prev = 0;
     int fill = quicklist->fill;
     quicklistNode *node = entry->node;
@@ -915,6 +917,7 @@ REDIS_STATIC void _quicklistInsert(quicklist *quicklist, quicklistEntry *entry,
     /* Now determine where and how to insert the new element */
     if (!full && after) {
         D("Not full, inserting after current position.");
+        // 如果节点已压缩，则解压节点
         quicklistDecompressNodeForUse(node);
         unsigned char *next = ziplistNext(node->zl, entry->zi);
         if (next == NULL) {

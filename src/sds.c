@@ -60,9 +60,9 @@ static inline int sdsHdrSize(char type) {
 static inline char sdsReqType(size_t string_size) {
     if (string_size < 1<<5)
         return SDS_TYPE_5;
-    if (string_size < 1<<8)
+    if (string_size < 1<<8) // 255
         return SDS_TYPE_8;
-    if (string_size < 1<<16)
+    if (string_size < 1<<16) // 65535
         return SDS_TYPE_16;
 #if (LONG_MAX == LLONG_MAX)
     if (string_size < 1ll<<32)
@@ -99,19 +99,27 @@ static inline size_t sdsTypeMaxSize(char type) {
  *
  * You can print the string with printf() as there is an implicit \0 at the
  * end of the string. However the string is binary safe and can contain
- * \0 characters in the middle, as the length is stored in the sds header. */
+ * \0 characters in the middle, as the length is stored in the sds header.
+ * */
 sds _sdsnewlen(const void *init, size_t initlen, int trymalloc) {
+    // *init 表示字符串内容
+    // initlen 表示字符串长度
     void *sh;
     sds s;
+    // 【1】 根据指定的字符串长度，判断对应的sdshdr类型
     char type = sdsReqType(initlen);
     /* Empty strings are usually created in order to append. Use type 8
      * since type 5 is not good at this. */
+    // 【2】 长度为0的字符串通常需要扩容，不应该使用sdshdr5,这里修改为sdshdr8
     if (type == SDS_TYPE_5 && initlen == 0) type = SDS_TYPE_8;
+    // 【3】sdsHdrSize函数负责查询sdshdr结构体的长度
     int hdrlen = sdsHdrSize(type);
     unsigned char *fp; /* flags pointer. */
     size_t usable;
 
     assert(initlen + hdrlen + 1 > initlen); /* Catch size_t overflow */
+    // 【4】 s_malloc 函数负责申请内存空间。申请的内存空间长度为 hdrlen+initlen+1，其中hdrlen为sds结构体长度（不包含buf属性），initlen为字符串内容长度，最后一个字节用于存储空字符"\0"
+    // s_malloc与c语言中的malloc函数的作用相同，负责分配指定大小的内存空间
     sh = trymalloc?
         s_trymalloc_usable(hdrlen+initlen+1, &usable) :
         s_malloc_usable(hdrlen+initlen+1, &usable);
@@ -120,7 +128,9 @@ sds _sdsnewlen(const void *init, size_t initlen, int trymalloc) {
         init = NULL;
     else if (!init)
         memset(sh, 0, hdrlen+initlen+1);
-    s = (char*)sh+hdrlen;
+    // 【5】 给sds属性赋值, 即将前面通过内存分配器分配到的内存赋值给s,
+    // (char*)sh 代表了前面s_malloc_usable函数分配的内存的起始地址。(char*)sh+hdrlen 则将指针地址向前推进了hdrlen，使最终s指向了sdshdr.buf的起始地址
+    s = (char*)sh+hdrlen; // 这是个指针运算
     fp = ((unsigned char*)s)-1;
     usable = usable-hdrlen-1;
     if (usable > sdsTypeMaxSize(type))
@@ -131,7 +141,8 @@ sds _sdsnewlen(const void *init, size_t initlen, int trymalloc) {
             break;
         }
         case SDS_TYPE_8: {
-            SDS_HDR_VAR(8,s);
+            // SDS_HDR_VAR 是一个宏，负责将sh指针转化为对应的sdshdr结构体指针
+            SDS_HDR_VAR(8,s); // struct sdshdr8 *sh = (void*)((s)-(sizeof(struct sdshdr8)));
             sh->len = initlen;
             sh->alloc = usable;
             *fp = type;
@@ -162,6 +173,7 @@ sds _sdsnewlen(const void *init, size_t initlen, int trymalloc) {
     if (initlen && init)
         memcpy(s, init, initlen);
     s[initlen] = '\0';
+    // sds实际上就是char*的别名，这里返回的s指针指向 sdshdr.buf 属性，即字符串内容。Redis通过该指针可以直接读写字符串数据
     return s;
 }
 

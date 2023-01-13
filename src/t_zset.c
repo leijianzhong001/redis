@@ -86,11 +86,11 @@ zskiplist *zslCreate(void) {
     zsl->length = 0;
     zsl->header = zslCreateNode(ZSKIPLIST_MAXLEVEL,0,NULL);
     for (j = 0; j < ZSKIPLIST_MAXLEVEL; j++) {
-        zsl->header->level[j].forward = NULL;
-        zsl->header->level[j].span = 0;
+        zsl->header->level[j].forward = NULL; // 头节点的后继节点（forward是前进指针） 为空
+        zsl->header->level[j].span = 0; // 头节点所有层的rank为空
     }
-    zsl->header->backward = NULL;
-    zsl->tail = NULL;
+    zsl->header->backward = NULL; // 头节点的前驱节点（backward是后退指针）为空
+    zsl->tail = NULL; // 初始状态下尾节点为空
     return zsl;
 }
 
