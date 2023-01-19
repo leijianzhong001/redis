@@ -264,7 +264,7 @@ void setCommand(client *c) {
     if (parseExtendedStringArgumentsOrReply(c,&flags,&unit,&expire,COMMAND_SET) != C_OK) {
         return;
     }
-    // 把value转换成一个redisObject
+    // 为value设置编码，int、embstr或者raw
     c->argv[2] = tryObjectEncoding(c->argv[2]);
     setGenericCommand(c,flags,c->argv[1],c->argv[2],expire,unit,NULL,NULL);
 }

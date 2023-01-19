@@ -138,12 +138,12 @@ typedef struct quicklistIter {
 
 typedef struct quicklistEntry {
     const quicklist *quicklist;
-    quicklistNode *node;
+    quicklistNode *node; // 指定元素插入的quicklistNode节点
     unsigned char *zi;
     unsigned char *value;
     long long longval;
     unsigned int sz;
-    int offset;
+    int offset; // 指定插入ziplist的索引位置
 } quicklistEntry;
 
 #define QUICKLIST_HEAD 0

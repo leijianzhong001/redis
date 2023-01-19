@@ -255,12 +255,14 @@ int hashTypeSet(robj *o, sds field, sds value, int flags) {
                 f = field;
                 field = NULL;
             } else {
+                // 走这个分支
                 f = sdsdup(field);
             }
             if (flags & HASH_SET_TAKE_VALUE) {
                 v = value;
                 value = NULL;
             } else {
+                // 走这个分支
                 v = sdsdup(value);
             }
             dictAdd(o->ptr,f,v);
