@@ -535,7 +535,7 @@ int quicklistPushHead(quicklist *quicklist, void *value, size_t sz) {
         node->zl = ziplistPush(ziplistNew(), value, sz, ZIPLIST_HEAD);
 
         quicklistNodeUpdateSz(node);
-        // 将新创建的几点插入quicklist中
+        // 将新创建的节点插入quicklist中
         _quicklistInsertNodeBefore(quicklist, quicklist->head, node);
     }
     quicklist->count++;

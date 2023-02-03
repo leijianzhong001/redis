@@ -971,9 +971,15 @@ unsigned char *__ziplistDelete(unsigned char *zl, unsigned char *p, unsigned int
  * @param p 指向插入位置的后驱节点
  * @param s 待插入元素的内容
  * @param slen 待插入元素的长度
+ *
+ * intrev32ifbe函数完成如下工作：
+ *  1、是如果主机使用小端字节序，则不做处理；
+ *  2、如果主机使用大端字节序，则反转数据字节序（数据第1位与第4位、第二位和第三位交换），如果数据是大端字节序，则转化位小端字节序，如果数据是小端字节序，则转化为大端字节序
+ *  3、如果主机CPU使用的是小端字节序，则 intrev32ifbe 不做任何处理；
+ *  4、如果主机CPU使用的大端字节序，则从内存取出数据后，先调用 intrev32ifbe 函数将数据转化为大端字节序后再计算。在计算完成后，调用 intrev32ifbe 函数将数据转化为小端字节序后再存入内存
  */
 unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned char *s, unsigned int slen) {
-    // reqlen 是要插入元素的总长度
+    // reqlen 是要插入元素的总长度。
     size_t curlen = intrev32ifbe(ZIPLIST_BYTES(zl)), reqlen, newlen;
     unsigned int prevlensize, prevlen = 0;
     size_t offset;
@@ -1033,27 +1039,33 @@ unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned cha
         forcelarge = 1;
     }
 
-    // 【5】
+    // 【5】 重新为ziplist分配内存，主要是为插入节点申请空间。新ziplist的内存大小为curlen+reqlen+nextdiff（curlen变量为插入元素之前ziplist的大小）
     /* Store offset because a realloc may change the address of zl. */
+    // offset变量为插入节点的偏移量
     offset = p-zl;
+    // 当前ziplist大小 + 插入的元素大小 + 后驱节点的prevlen属性长度要调整的大小
     newlen = curlen+reqlen+nextdiff;
     zl = ziplistResize(zl,newlen);
+    // 将p重新赋值为zl+offset, 是因为ziplistResize函数可能会为ziplist申请新的内存地址
     p = zl+offset;
 
+    // 下面针对存在后驱节点的场景进行处理
     /* Apply memory move when necessary and update tail offset. */
     if (p[0] != ZIP_END) {
-        // 【6】
+        // 【6】 将插入位置后面的所有节点后移，为插入节点腾出空间。移动空间的起始地址为p-nextdiff, 减去nextdiff是因为后驱节点的prevlen属性需要调整nextdiff长度。
+        // 移动空间的长度为 curlen-offset-1+nextdiff， 减一是因为最后的结束标志节点已经在ziplistResize函数中设置了
+        // memmove 是C语言提供的内存移动函数。
         /* Subtract one because of the ZIP_END bytes */
         memmove(p+reqlen,p-nextdiff,curlen-offset-1+nextdiff);
 
-        // 【7】
+        // 【7】 修改后驱节点的prevlen属性
         /* Encode this entry's raw length in the next entry. */
         if (forcelarge)
             zipStorePrevEntryLengthLarge(p+reqlen,reqlen);
         else
             zipStorePrevEntryLength(p+reqlen,reqlen);
 
-        // 【8】
+        // 【8】 更新ziplist.zltail, 将其加上reqlen的值
         /* Update offset for tail */
         ZIPLIST_TAIL_OFFSET(zl) =
             intrev32ifbe(intrev32ifbe(ZIPLIST_TAIL_OFFSET(zl))+reqlen);
@@ -1061,19 +1073,20 @@ unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned cha
         /* When the tail contains more than one entry, we need to take
          * "nextdiff" in account as well. Otherwise, a change in the
          * size of prevlen doesn't have an effect on the *tail* offset. */
-        // 【9】
+        // 【9】 如果存在多个后驱节点，则ziplist.zltail还要加上nextdiff的值。
+        // 如果只有一个后驱节点，则不需要加上nextdiff，因为这时后驱节点大小变化了nextdiff，但后驱节点只移动了reqlen
         assert(zipEntrySafe(zl, newlen, p+reqlen, &tail, 1));
         if (p[reqlen+tail.headersize+tail.len] != ZIP_END) {
             ZIPLIST_TAIL_OFFSET(zl) =
                 intrev32ifbe(intrev32ifbe(ZIPLIST_TAIL_OFFSET(zl))+nextdiff);
         }
     } else {
-        // 【10】
+        // 【10】 这里针对不存在后驱节点的场景进行处理，只需更新最后一个节点的偏移量ziplist.zltail
         /* This element will be the new tail. */
         ZIPLIST_TAIL_OFFSET(zl) = intrev32ifbe(p-zl);
     }
 
-    // 【11】
+    // 【11】 级联更新
     /* When nextdiff != 0, the raw length of the next entry has changed, so
      * we need to cascade the update throughout the ziplist */
     if (nextdiff != 0) {
@@ -1082,7 +1095,7 @@ unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned cha
         p = zl+offset;
     }
 
-    // 【12】
+    // 【12】 写入插入数据
     /* Write the entry */
     p += zipStorePrevEntryLength(p,prevlen);
     p += zipStoreEntryEncoding(p,encoding,slen);
@@ -1092,7 +1105,7 @@ unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned cha
         zipSaveInteger(p,value,encoding);
     }
 
-    // 【13】
+    // 【13】 更新ziplist节点数量
     ZIPLIST_INCR_LENGTH(zl,1);
     return zl;
 }

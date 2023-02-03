@@ -89,7 +89,7 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
 
     o->type = OBJ_STRING;
     o->encoding = OBJ_ENCODING_EMBSTR;
-    o->ptr = sh+1; // 注意这个写法，直接将sds字符串紧挨着放在redisObject对象的后面
+    o->ptr = sh+1; // sh+1所在的地址是sdshdr8对象的末尾，即buf数组所在的地方，这里的ptr直接指向buf数组所在的位置
     o->refcount = 1;
     if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
         o->lru = (LFUGetTimeInMinutes()<<8) | LFU_INIT_VAL;
@@ -103,6 +103,7 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
     if (ptr == SDS_NOINIT)
         sh->buf[len] = '\0';
     else if (ptr) {
+        // 函数memcpy从ptr的位置开始向后复制len个字节的数据到sh->buf的内存位置
         memcpy(sh->buf,ptr,len);
         sh->buf[len] = '\0';
     } else {
@@ -155,6 +156,7 @@ robj *tryCreateStringObject(const char *ptr, size_t len) {
 robj *createStringObjectFromLongLongWithOptions(long long value, int valueobj) {
     robj *o;
 
+    // 一般maxmemory都会被设置，所以不走这个分支
     if (server.maxmemory == 0 ||
         !(server.maxmemory_policy & MAXMEMORY_FLAG_NO_SHARED_INTEGERS))
     {
@@ -461,18 +463,20 @@ robj *tryObjectEncoding(robj *o) {
     /* It's not safe to encode shared objects: shared objects can be shared
      * everywhere in the "object space" of Redis and may end in places where
      * they are not handled. We handle them only as values in the keyspace. */
+    // 【1】 该数据对象被多处引用，不能再进行编码操作
      if (o->refcount > 1) return o;
 
     /* Check if we can represent this string as a long integer.
      * Note that we are sure that a string larger than 20 chars is not
      * representable as a 32 nor 64 bit integer. */
     len = sdslen(s);
-    // 长度小于20并且可以转为long类型
+    // 【2】 长度小于20并且可以转为long long类型。 在c语言中，long long类型占用8个字节，取值范围是-9223372036854775808~9223372036854775807，因此最多能保存长度为19的字符串转换之后的数值，再加上负号位数，一共20位
     if (len <= 20 && string2l(s,len,&value)) {
         /* This object is encodable as a long. Try to use a shared object.
          * Note that we avoid using shared integers when maxmemory is used
          * because every object needs to have a private LRU field for the LRU
          * algorithm to work well. */
+        // 【3】 尝试共享数据，如果未配置 server.maxmemory，或者没有开启数据淘汰算法，那么尝试进行数据共享
         if ((server.maxmemory == 0 ||
             !(server.maxmemory_policy & MAXMEMORY_FLAG_NO_SHARED_INTEGERS)) &&
             value >= 0 &&
@@ -483,12 +487,15 @@ robj *tryObjectEncoding(robj *o) {
             incrRefCount(shared.integers[value]);
             return shared.integers[value];
         } else {
+            // 【4】 如果不能进行数据共享，原编码格式为 OBJ_ENCODING_RAW， 则将redisObject的编码方式转为OBJ_ENCODING_INT，redisObject.ptr的值直接替换为转换后的数值
             if (o->encoding == OBJ_ENCODING_RAW) {
                 sdsfree(o->ptr);
                 o->encoding = OBJ_ENCODING_INT;
                 o->ptr = (void*) value;
                 return o;
             } else if (o->encoding == OBJ_ENCODING_EMBSTR) {
+                // 【5】 如果不能使用共享数据，且原编码格式为 OBJ_ENCODING_EMBSTR， 由于redisObject和sds存放在同一个内存块中，无法直接替换redisObject.ptr，
+                // 所以调用createStringObjectFromLongLongForValue函数创建一个新的redisObject,编码为 OBJ_ENCODING_INT， redisObject.ptr指向long long 类型或long类型
                 decrRefCount(o);
                 return createStringObjectFromLongLongForValue(value);
             }
@@ -499,6 +506,7 @@ robj *tryObjectEncoding(robj *o) {
      * try the EMBSTR encoding which is more efficient.
      * In this representation the object and the SDS string are allocated
      * in the same chunk of memory to save space and cache misses. */
+    // 【6】 到这里，说明字符串不能转为 OBJ_ENCODING_INT 编码，尝试将其转换为 OBJ_ENCODING_EMBSTR 编码
     if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT) {
         robj *emb;
 
@@ -517,6 +525,7 @@ robj *tryObjectEncoding(robj *o) {
      * We do that only for relatively large strings as this branch
      * is only entered if the length of the string is greater than
      * OBJ_ENCODING_EMBSTR_SIZE_LIMIT. */
+    // 【7】 到这里，说明字符串只能使用 OBJ_ENCODING_RAW 编码，尝试释放sds中剩余的可用空间
     trimStringObjectIfNeeded(o);
 
     /* Return the original object. */

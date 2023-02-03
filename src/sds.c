@@ -58,16 +58,16 @@ static inline int sdsHdrSize(char type) {
 }
 
 static inline char sdsReqType(size_t string_size) {
-    if (string_size < 1<<5)
+    if (string_size < 1<<5) // 32
         return SDS_TYPE_5;
-    if (string_size < 1<<8) // 255
+    if (string_size < 1<<8) // 256
         return SDS_TYPE_8;
-    if (string_size < 1<<16) // 65535
+    if (string_size < 1<<16) // 65536
         return SDS_TYPE_16;
-#if (LONG_MAX == LLONG_MAX)
-    if (string_size < 1ll<<32)
+#if (LONG_MAX == LLONG_MAX) //
+    if (string_size < 1ll<<32) // 4294967296
         return SDS_TYPE_32;
-    return SDS_TYPE_64;
+    return SDS_TYPE_64; //
 #else
     return SDS_TYPE_32;
 #endif
