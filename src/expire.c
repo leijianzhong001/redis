@@ -54,8 +54,10 @@
 int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now) {
     long long t = dictGetSignedIntegerVal(de);
     if (now > t) {
+        // 说明过期了
         sds key = dictGetKey(de);
         robj *keyobj = createStringObject(key,sdslen(key));
+        // 删除过期的key并传播给从节点
         deleteExpiredKeyAndPropagate(db,keyobj);
         decrRefCount(keyobj);
         return 1;
@@ -111,17 +113,25 @@ int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now) {
                                                    we do extra efforts. */
 
 void activeExpireCycle(int type) {
+    // type 指定 activeExpireCycle 函数的执行模式，，取值为 ACTIVE_EXPIRE_CYCLE_SLOW和ACTIVE_EXPIRE_CYCLE_FAST
     /* Adjust the running parameters according to the configured expire
      * effort. The default effort is 1, and the maximum configurable effort
      * is 10. */
     unsigned long
+    // 【1】 为避免主函数阻塞，Redis需要控制该函数的执行时间。这里计算几个阈值变量，用于后面控制当前函数的执行时间
+    // active-expire-effort 配置控制了 activeExpireCycle 函数的执行时间，占用CPU的时间，以及最终的数据库中已过期键的比例
+    // 该值的配置范围为1~10， 默认为1，该值越大，activeExpireCycle函数执行越久，占用CPU越多，并且清除过后数据库中已过期键的比例越低
     effort = server.active_expire_effort-1, /* Rescale from 0 to 9. */
+    // 【1.2】 每次采样删除操作中采样键的最大数量，默认为20
     config_keys_per_loop = ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP +
                            ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP/4*effort,
+    // 快模式执行的事件间隔
     config_cycle_fast_duration = ACTIVE_EXPIRE_CYCLE_FAST_DURATION +
                                  ACTIVE_EXPIRE_CYCLE_FAST_DURATION/4*effort,
+    // 最大能使用百分之多少的CPU，默认值为25%. 这个25%实际上是通过占用CPU时间表达的。在每个执行周期的100ms内， timelimit计算的结果为25ms, 所以试试20%
     config_cycle_slow_time_perc = ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC +
                                   2*effort,
+    // 【1.3】 每次采样后，如果当前已过期键所占比例低于该阈值，则不再处理该数据库，默认为10.即默认情况下，当数据库中已过期的键所占的比例低于10%时，不再处理该数据库
     config_cycle_acceptable_stale = ACTIVE_EXPIRE_CYCLE_ACCEPTABLE_STALE-
                                     effort;
 
@@ -133,6 +143,8 @@ void activeExpireCycle(int type) {
 
     int j, iteration = 0;
     int dbs_per_call = CRON_DBS_PER_CALL;
+    // 【1.1】 timelimit 用于标识activeExpireCycle函数执行的最长时间，该值的计算与函数的执行模式，server.hz, active-expire-effort相关。
+    // 在 ACTIVE_EXPIRE_CYCLE_SLOW 模式下默认为 25000, 在 ACTIVE_EXPIRE_CYCLE_FAST 模式下默认为1000， 单位是微妙
     long long start = ustime(), timelimit, elapsed;
 
     /* When clients are paused the dataset should be static not just from the
@@ -145,10 +157,12 @@ void activeExpireCycle(int type) {
          * for time limit, unless the percentage of estimated stale keys is
          * too high. Also never repeat a fast cycle for the same period
          * as the fast cycle total duration itself. */
+        // 如果上次执行该函数不是以超时方式退出的，并且过期key在内存中的占比不超过10% 则不执行快模式
         if (!timelimit_exit &&
             server.stat_expired_stale_perc < config_cycle_acceptable_stale)
             return;
 
+        // 如果2s内已经执行过一次快模式了，则退出
         if (start < last_fast_cycle + (long long)config_cycle_fast_duration*2)
             return;
 
@@ -168,12 +182,16 @@ void activeExpireCycle(int type) {
     /* We can use at max 'config_cycle_slow_time_perc' percentage of CPU
      * time per iteration. Since this function gets called with a frequency of
      * server.hz times per second, the following is the max amount of
-     * microseconds we can spend in this function. */
+     * microseconds we can spend in this function.
+     * 我们可以在每次迭代中使用最大'config_cycle_slow_time_perc'百分比的CPU时间。因为这个函数以服务器的频率被调用,每秒Hz次数，下面是我们可以在这个函数中花费的最大微秒数
+     * */
+    // 25000µs->25ms
     timelimit = config_cycle_slow_time_perc*1000000/server.hz/100;
     timelimit_exit = 0;
     if (timelimit <= 0) timelimit = 1;
 
     if (type == ACTIVE_EXPIRE_CYCLE_FAST)
+        // 快模式下的超时事件为1ms
         timelimit = config_cycle_fast_duration; /* in microseconds. */
 
     /* Accumulate some global stats as we expire keys, to have some idea
@@ -182,10 +200,13 @@ void activeExpireCycle(int type) {
     long total_sampled = 0;
     long total_expired = 0;
 
+    // 【2】 遍历指定数量的数据库， dbs_per_call的值取数据库数量与CRON_DBS_PER_CALL的较小值，默认为16
+    // timelimit_exit不为0，代表该函数处理时间超出限制，退出函数
     for (j = 0; j < dbs_per_call && timelimit_exit == 0; j++) {
         /* Expired and checked in a single loop. */
         unsigned long expired, sampled;
 
+        // 【3】 获取数据库， server.db标识0号数据库的起始地址，current_db为静态局部变量，记录当前正在处理的数据库。 这里的顺序应该是倒着的，从15->0
         redisDb *db = server.db+(current_db % server.dbnum);
 
         /* Increment the DB now so we are sure if we run out of time
@@ -193,6 +214,7 @@ void activeExpireCycle(int type) {
          * distribute the time evenly across DBs. */
         current_db++;
 
+        // 【4】 处理该数据库中的过期字典
         /* Continue to expire if at the end of the cycle there are still
          * a big percentage of keys to expire, compared to the number of keys
          * we scanned. The percentage, stored in config_cycle_acceptable_stale
@@ -219,11 +241,13 @@ void activeExpireCycle(int type) {
 
             /* The main collection cycle. Sample random keys among keys
              * with an expire set, checking for expired ones. */
+            // 本次过期被删除的key
             expired = 0;
             sampled = 0;
             ttl_sum = 0;
             ttl_samples = 0;
 
+            // 将采样数量赋给num变量
             if (num > config_keys_per_loop)
                 num = config_keys_per_loop;
 
@@ -240,23 +264,29 @@ void activeExpireCycle(int type) {
             long max_buckets = num*20;
             long checked_buckets = 0;
 
+            // 【5】 执行一次采样删除操作，通过统计采样数据量中已过期键的比例，预估整个数据库中已过期键的比例
             while (sampled < num && checked_buckets < max_buckets) {
+                // 两个字典，多出来的那个用户扩容
                 for (int table = 0; table < 2; table++) {
                     if (table == 1 && !dictIsRehashing(db->expires)) break;
 
+                    // 【6】 计算待处理的hash表数组索引。这里并没有使用随机算法，而是按顺序处理hash表数组所有索引上的元素。db->expires_cursor记录了下个处理的索引，使用该属性计算待处理的索引
                     unsigned long idx = db->expires_cursor;
                     idx &= db->expires->ht[table].sizemask;
+                    // 【7】 检查该索引上的所有的key，这里首先获取该索引位置上的链表的首个元素
                     dictEntry *de = db->expires->ht[table].table[idx];
                     long long ttl;
 
                     /* Scan the current bucket of the current table. */
                     checked_buckets++;
+                    // 检查该索引上的所有的key， 调用 activeExpireCycleTryExpire 函数删除过期的key. 每检查一个key, 就将采样键数量+1
                     while(de) {
                         /* Get the next entry now since this entry may get
                          * deleted. */
                         dictEntry *e = de;
                         de = de->next;
 
+                        // 因为值是一个时间戳，所以这里肯定是数字，计算该key剩余的ttl
                         ttl = dictGetSignedIntegerVal(e)-now;
                         if (activeExpireCycleTryExpire(db,e,now)) expired++;
                         if (ttl > 0) {
@@ -265,6 +295,7 @@ void activeExpireCycle(int type) {
                             ttl_sum += ttl;
                             ttl_samples++;
                         }
+                        // 采样键数量+1
                         sampled++;
                     }
                 }
@@ -284,12 +315,14 @@ void activeExpireCycle(int type) {
                 db->avg_ttl = (db->avg_ttl/50)*49 + (avg_ttl/50);
             }
 
+            // 【8】 每执行16次采样操作，就检查该函数的执行时间是否超过限制
             /* We can't block forever here even if there are many keys to
              * expire. So after a given amount of milliseconds return to the
              * caller waiting for the other active expire cycle. */
             if ((iteration & 0xf) == 0) { /* check once every 16 iterations. */
                 elapsed = ustime()-start;
                 if (elapsed > timelimit) {
+                    // 设置超时退出标志
                     timelimit_exit = 1;
                     server.stat_expired_time_cap_reached_count++;
                     break;
@@ -298,6 +331,7 @@ void activeExpireCycle(int type) {
             /* We don't repeat the cycle for the current database if there are
              * an acceptable amount of stale keys (logically expired but yet
              * not reclaimed). */
+            // 【9】 根据采样结果统计已过期键所占的比例，如果该比例小于 config_cycle_acceptable_stale ，则认为当前数据库过期键的比例达到要求，不再继续处理该数据库
         } while (sampled == 0 ||
                  (expired*100/sampled) > config_cycle_acceptable_stale);
     }
