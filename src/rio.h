@@ -40,14 +40,15 @@
 #define RIO_FLAG_READ_ERROR (1<<0)
 #define RIO_FLAG_WRITE_ERROR (1<<1)
 
+// 生成RDB文件需要执行IO写操作。Redis专门设计了IO的读写层RIO,将不同存储介质的io操作统一封装到 _rio 中
 struct _rio {
     /* Backend functions.
      * Since this functions do not tolerate short writes or reads the return
      * value is simplified to: zero on error, non zero on complete success. */
-    size_t (*read)(struct _rio *, void *buf, size_t len);
-    size_t (*write)(struct _rio *, const void *buf, size_t len);
+    size_t (*read)(struct _rio *, void *buf, size_t len); // 对底层介质执行读操作的函数
+    size_t (*write)(struct _rio *, const void *buf, size_t len); // 对底层介质执行写操作的函数
     off_t (*tell)(struct _rio *);
-    int (*flush)(struct _rio *);
+    int (*flush)(struct _rio *); // 对底层介质执行刷出操作的函数
     /* The update_cksum method if not NULL is used to compute the checksum of
      * all the data that was read or written so far. The method should be
      * designed so that can be called with the current checksum, and the buf
@@ -91,7 +92,7 @@ struct _rio {
             off_t pos;
             sds buf;
         } fd;
-    } io;
+    } io; // 底层介质，支持文件file、内存buffer、连接conn、文件描述符fd
 };
 
 typedef struct _rio rio;
