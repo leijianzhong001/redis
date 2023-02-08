@@ -144,6 +144,7 @@ int dictResize(dict *d)
  * Returns DICT_OK if expand was performed, and DICT_ERR if skipped. */
 int _dictExpand(dict *d, unsigned long size, int* malloc_failed)
 {
+    // size 标识 新hash表数组长度
     if (malloc_failed) *malloc_failed = 0;
 
     /* the size is invalid if it is smaller than the number of
@@ -151,6 +152,11 @@ int _dictExpand(dict *d, unsigned long size, int* malloc_failed)
     if (dictIsRehashing(d) || d->ht[0].used > size)
         return DICT_ERR;
 
+    // 【1】 _dictNextPower 函数会将指定的长度调整成2次幂
+    // 为什么要将hash表的大小调整为2次幂呢？ 这样是为了让ht[1]的哈希表数组长度是ht[0]的倍数， 有利于ht[0]中的元素更均匀的迁移到ht[1]中
+    // 我们看一下hash表数组索引计算方法： idx = hash & ht.sizemask, 由于sizemask=size-1, 因此计算方法等价于idx = hash % (ht.size).
+    // 因此假如ht[0].size为n， ht[1].size则为2n, 对于ht[0]上的元素， ht[0].table[k]的元素要不迁移到ht[1].table[k], 要不迁移到ht[1].table[k+n]。
+    // 这样就实现了将一个索引位的数据拆分到ht[1].table的两个索引位上
     dictht n; /* the new hash table */
     unsigned long realsize = _dictNextPower(size);
 
@@ -161,6 +167,7 @@ int _dictExpand(dict *d, unsigned long size, int* malloc_failed)
     /* Rehashing to the same table size is not useful. */
     if (realsize == d->ht[0].size) return DICT_ERR;
 
+    // 【2】 创建一个新的hashtable
     /* Allocate the new hash table and initialize all pointers to NULL */
     n.size = realsize;
     n.sizemask = realsize-1;
@@ -170,10 +177,13 @@ int _dictExpand(dict *d, unsigned long size, int* malloc_failed)
         if (*malloc_failed)
             return DICT_ERR;
     } else
+        // 这个地方给新的hashtable分配了 realsize * sizeof(dictEntry*) 的长度，起始就是 realsize长度的指针类型数组
         n.table = zcalloc(realsize*sizeof(dictEntry*));
 
     n.used = 0;
 
+    // 【3】 d->ht[0].table == NULL 代表字典的hash表数组还没有初始化，一般出现在dict新建的场景下。将新的hashtable赋值给 d.ht[0] .
+    // 现在他就可以存储数据了。这里并不是扩容操作，而是字典第一次使用前的初始化操作
     /* Is this the first initialization? If so it's not really a rehashing
      * we just set the first hash table so that it can accept keys. */
     if (d->ht[0].table == NULL) {
@@ -181,6 +191,7 @@ int _dictExpand(dict *d, unsigned long size, int* malloc_failed)
         return DICT_OK;
     }
 
+    // 【4】  否则，将新的hashtable赋值给 d->ht[1]，并将 d->rehashidx 赋值为0，表示下一次扩容单步操作要迁移的ht[0].table[0]位置的所有元素到ht[1].table中
     /* Prepare a second hash table for incremental rehashing */
     d->ht[1] = n;
     d->rehashidx = 0;
@@ -209,7 +220,9 @@ int dictTryExpand(dict *d, unsigned long size) {
  * will visit at max N*10 empty buckets in total, otherwise the amount of
  * work it does would be unbound and the function may block for a long time. */
 int dictRehash(dict *d, int n) {
+    // n 本次迁移的hash数组的索引的数量
     int empty_visits = n*10; /* Max number of empty buckets to visit. */
+    // 【1】 如果当前字典没有在扩容，则直接退出
     if (!dictIsRehashing(d)) return 0;
 
     while(n-- && d->ht[0].used != 0) {
@@ -218,32 +231,41 @@ int dictRehash(dict *d, int n) {
         /* Note that rehashidx can't overflow as we are sure there are more
          * elements because ht[0].used != 0 */
         assert(d->ht[0].size > (unsigned long)d->rehashidx);
+        // 【2】 从d->rehashidx位置开始找，找到第一个非空的索引位置
         while(d->ht[0].table[d->rehashidx] == NULL) {
             d->rehashidx++;
+            // 如果这里查找的空索引位的数量大于 n*10，则退出
             if (--empty_visits == 0) return 1;
         }
+        // 【3】 取出对应位置的dictEntry. 并遍历该位置上的所有元素
         de = d->ht[0].table[d->rehashidx];
         /* Move all the keys in this bucket from the old to the new hash HT */
         while(de) {
             uint64_t h;
 
             nextde = de->next;
+            // 计算当前key在ht[1].tables中的索引值，并将元素移动到 ht[1].tables 中
             /* Get the index in the new hash table */
             h = dictHashKey(d, de->key) & d->ht[1].sizemask;
             de->next = d->ht[1].table[h];
-            d->ht[1].table[h] = de;
+            d->ht[1].table[h] = de; //
             d->ht[0].used--;
             d->ht[1].used++;
             de = nextde;
         }
+        // 将当前key在 ht[0].tables 中删除, 但这个操作只是将该该值原本保存的地址值置为NULL, 不再引用该dictEntry, 并没有释放空间
         d->ht[0].table[d->rehashidx] = NULL;
         d->rehashidx++;
     }
 
+    // 【4】 d->ht[0].used == 0 表示所有元素都已经迁移完毕。
     /* Check if we already rehashed the whole table... */
     if (d->ht[0].used == 0) {
+        // 释放 ht[0].table 占用的内存空间
         zfree(d->ht[0].table);
+        // 使用新的数组替换旧的数组
         d->ht[0] = d->ht[1];
+        // 重置 rehashIdx, d->ht[1]
         _dictReset(&d->ht[1]);
         d->rehashidx = -1;
         return 0;
@@ -989,6 +1011,7 @@ static int dictTypeExpandAllowed(dict *d) {
                     (double)d->ht[0].used / d->ht[0].size);
 }
 
+// hash表扩容
 /* Expand the hash table if needed */
 static int _dictExpandIfNeeded(dict *d)
 {
@@ -1002,6 +1025,12 @@ static int _dictExpandIfNeeded(dict *d)
      * table (global setting) or we should avoid it but the ratio between
      * elements/buckets is over the "safe" threshold, we resize doubling
      * the number of buckets. */
+    // 扩容需要满足两个条件：
+    //      1、 d->ht[0].used >= d->ht[0].size  hash表存储的键值对数量大于或等于hash表数组的长度
+    //      2、 开启了 dict_can_resize 或者负载因子大于 dict_force_resize_ratio
+    // d->ht[0].used/d->ht[0].size 即hash表存储的键值对的数量除以hash表数组的长度，称之为负载因子。
+    // dict_can_resize 默认开启， 所以默认情况下，当负载因子大于1的时候就开始扩容了。负载因子等于1可能出现较高的hash冲突率，但这样可以提交hash表的内存使用率。
+    // dict_can_resize 关闭时，必须等到负载因子大于5才会强制扩容。用户不能通过配置关闭 dict_can_resize， 该值的开关与redis的持久化有关
     if (d->ht[0].used >= d->ht[0].size &&
         (dict_can_resize ||
          d->ht[0].used/d->ht[0].size > dict_force_resize_ratio) &&
@@ -1038,9 +1067,11 @@ static long _dictKeyIndex(dict *d, const void *key, uint64_t hash, dictEntry **e
     dictEntry *he;
     if (existing) *existing = NULL;
 
+    // 【1】 根据需要进行扩容或初始化hash表操作
     /* Expand the hash table if needed */
     if (_dictExpandIfNeeded(d) == DICT_ERR)
         return -1;
+    // 【2】 遍历ht[0]和ht[1],计算hash表数组索引，并判断hash表中是否已存在参数key, 若已存在，则将对应的dictEntry赋值给 existing
     for (table = 0; table <= 1; table++) {
         idx = hash & d->ht[table].sizemask;
         /* Search if this slot does not already contain the given key */
@@ -1052,6 +1083,7 @@ static long _dictKeyIndex(dict *d, const void *key, uint64_t hash, dictEntry **e
             }
             he = he->next;
         }
+        // 如果当前没有进行扩容操作，则计算ht[0]的索引后便退出，不需要计算ht[1]
         if (!dictIsRehashing(d)) break;
     }
     return idx;

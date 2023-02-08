@@ -104,7 +104,7 @@ quicklist *quicklistCreate(void) {
     quicklist->len = 0;
     quicklist->count = 0;
     quicklist->compress = 0;
-    quicklist->fill = -2;
+    quicklist->fill = -2; // 8kb
     quicklist->bookmark_count = 0;
     return quicklist;
 }
@@ -408,6 +408,7 @@ REDIS_STATIC void _quicklistInsertNodeAfter(quicklist *quicklist,
 REDIS_STATIC int
 _quicklistNodeSizeMeetsOptimizationRequirement(const size_t sz,
                                                const int fill) {
+    // -2
     if (fill >= 0)
         return 0;
 
@@ -434,6 +435,7 @@ _quicklistNodeSizeMeetsOptimizationRequirement(const size_t sz,
 REDIS_STATIC int _quicklistNodeAllowInsert(const quicklistNode *node,
                                            const int fill, const size_t sz) {
     // sz就是实际字符串的长度
+    // fill 填充因子，控制ziplist大小的，默认为-2， 即允许ziplist最大为8kb
     if (unlikely(!node))
         return 0;
 
@@ -474,6 +476,7 @@ REDIS_STATIC int _quicklistNodeAllowInsert(const quicklistNode *node,
     /* new_sz overestimates if 'sz' encodes to an integer type */
     unsigned int new_sz = node->sz + sz + ziplist_overhead;
     if (likely(_quicklistNodeSizeMeetsOptimizationRequirement(new_sz, fill)))
+        // 小于等于8kb
         return 1;
     /* when we return 1 above we know that the limit is a size limit (which is
      * safe, see comments next to optimization_level and SIZE_SAFETY_LIMIT) */
@@ -554,6 +557,7 @@ int quicklistPushTail(quicklist *quicklist, void *value, size_t sz) {
             _quicklistNodeAllowInsert(quicklist->tail, quicklist->fill, sz))) {
         quicklist->tail->zl =
             ziplistPush(quicklist->tail->zl, value, sz, ZIPLIST_TAIL);
+        // 更新ziplist长度
         quicklistNodeUpdateSz(quicklist->tail);
     } else {
         quicklistNode *node = quicklistCreateNode();

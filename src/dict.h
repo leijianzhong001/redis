@@ -72,9 +72,9 @@ typedef struct dictType {
  * implement incremental rehashing, for the old to the new table. */
 typedef struct dictht {
     dictEntry **table; // 这是一个指针，实际上会赋值为一个*dictEntry类型数组 8
-    unsigned long size; // 8
+    unsigned long size; // 8 hash表数组的长度
     unsigned long sizemask; // 8
-    unsigned long used; // 8
+    unsigned long used; // 8 键值对的数量
 } dictht;
 
 typedef struct dict {

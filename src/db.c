@@ -1453,6 +1453,7 @@ void deleteExpiredKeyAndPropagate(redisDb *db, robj *keyobj) {
     notifyKeyspaceEvent(NOTIFY_EXPIRED,"expired",keyobj,db->id);
     signalModifiedKey(NULL, db, keyobj);
     propagateExpire(db,keyobj,server.lazyfree_lazy_expire);
+    // 过期并删除的key之后，会将这里的统计信息+1
     server.stat_expiredkeys++;
 }
 
