@@ -106,7 +106,7 @@ typedef struct raxNode {
      * character, and 'size' raxNode pointers, point to each child node.
      * Note how the character is not stored in the children but in the
      * edge of the parents:
-     *
+     * 如果节点没有压缩，则rexNode有'size'值，表示子节点的数量，每个子字符有一个 raxNode指针，指向每个子节点。注意字符不是存储在子结点中，而是存储在父结点的边缘中（value-ptr）:
      * [header iscompr=0][abc][a-ptr][b-ptr][c-ptr](value-ptr?)
      *
      * if node is compressed (iscompr bit is 1) the node has 1 children.
@@ -115,17 +115,21 @@ typedef struct raxNode {
      * nodes linked one after the other, for which only the last one in
      * the sequence is actually represented as a node, and pointed to by
      * the current compressed node.
-     *
+     * 如果节点被压缩(iscompr位为1)，则节点有1个子节点。
+     * 在这种情况下，字符串的'size'字节立即存储在data的开始处，表示由一个接一个连接的连续节点(字符character)组成的序列，对于该序列，只有最后一个节点（字符character）实际表示为节点，并由当前压缩的节点指向。
      * [header iscompr=1][xyz][z-ptr](value-ptr?)
      *
      * Both compressed and not compressed nodes can represent a key
      * with associated data in the radix tree at any level (not just terminal
      * nodes).
+     * 压缩节点和未压缩节点都可以在任何级别(不仅仅是终端节点)表示radix tree中具有相关数据的键。
      *
      * If the node has an associated key (iskey=1) and is not NULL
      * (isnull=0), then after the raxNode pointers pointing to the
      * children, an additional value pointer is present (as you can see
      * in the representation above as "value-ptr" field).
+     * 如果节点有一个关联的键(iskey=1)并且不是NULL (isnull=0)，那么在指向子节点的raxNode指针之后，会出现一个附加的值指针(正如您在上面的表示中看到的“value-ptr”字段)。
+     * 即前面是一个完整的key(iskey=1), 并且当前节点的value有值，说的是一个节点即有值，也有子节点
      */
     unsigned char data[];
 } raxNode;
@@ -138,7 +142,9 @@ typedef struct rax {
 
 /* Stack data structure used by raxLowWalk() in order to, optionally, return
  * a list of parent nodes to the caller. The nodes do not have a "parent"
- * field for space concerns, so we use the auxiliary stack when needed. */
+ * field for space concerns, so we use the auxiliary stack when needed.
+ * raxLowWalk()使用的Stack数据结构，以便可选地向调用者返回父节点列表。节点没有“parent”字段来处理空间问题，因此我们在需要时使用辅助堆栈。
+ * */
 #define RAX_STACK_STATIC_ITEMS 32
 typedef struct raxStack {
     void **stack; /* Points to static_items or an heap allocated array. */
