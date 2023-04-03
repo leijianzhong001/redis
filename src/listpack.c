@@ -340,20 +340,26 @@ int lpEncodeGetType(unsigned char *ele, uint32_t size, unsigned char *intenc, ui
  * The function returns the number of bytes used to encode it, from
  * 1 to 5. If 'buf' is NULL the function just returns the number of bytes
  * needed in order to encode the backlen.
+ * 翻译：将长度为l的前一个元素的反向编码变量长度字段存储在目标缓冲区“buf”中。
+ * 该函数返回用于编码它的字节数，从1到5。如果“buf”为NULL，则函数仅返回用于编码backlen所需的字节数。
  *
  * lpEncodeBacklen 函数负责将 enclen（编码长度+内容长度, 不包含backlen的元素长度)转换为backlen，转换规则为：
- * 将 enclen 的每7个bit划分为一组，保存到backlen的一个字节中，并且将字节序倒转。
+ * 将 enclen 的每7个bit划分为一组（有1位是符号位），保存到backlen的一个字节中，并且将字节序倒转。
  * 例如，元素内容为字符串且长度为 11912261672， 则enclen为11912261677， 二进制值为：
  * 11110000 00000010 11000110 00000110 10110000 00101000
  * backlen 的每个字节最高位为1时，代表前面1字节也是backlen的一部分
  *
+ * 这个函数具体的的转换方式有点看不懂，看起来象是将enclen值转换为小端序存储
  * */
 unsigned long lpEncodeBacklen(unsigned char *buf, uint64_t l) {
     if (l <= 127) {
+        // 127 ==> 01111111
         if (buf) buf[0] = l;
         // 元素编码长度 + 字符串内容的大小小于127， 说明是整型值或者小字符串。以小字符串为例，其元素 编码长度 + 字符串内容的大小最大为64个字节，64使用1个字节即可表示，所以backlen返回1
+        // 127 刚好是一个字节可以表达的最大值
         return 1;
     } else if (l < 16383) {
+        // 16383 ==> 00111111 11111111
         if (buf) {
             buf[0] = l>>7;
             buf[1] = (l&127)|128;
@@ -409,8 +415,8 @@ uint64_t lpDecodeBacklen(unsigned char *p) {
 void lpEncodeString(unsigned char *buf, unsigned char *s, uint32_t len) {
     if (len < 64) {
         // 63 | 10000000 => 00111111 | 10000000 => 10111111
-        buf[0] = len | LP_ENCODING_6BIT_STR;
-        memcpy(buf+1,s,len);
+        buf[0] = len | LP_ENCODING_6BIT_STR; // 写入字符串编码类型，小字符串，长度范围是`0~63`字节，编码类型就是 10xxxxxx，其中xxxxxx部分为字符串长度
+        memcpy(buf+1,s,len); // 写入字符串内容
     } else if (len < 4096) {
         buf[0] = (len >> 8) | LP_ENCODING_12BIT_STR;
         buf[1] = len & 0xff;
@@ -717,7 +723,9 @@ unsigned char *lpGet(unsigned char *p, int64_t *count, unsigned char *intbuf) {
  * 一个listpack的整体结构如下：
  *      <lpbytes><lpnumbers><entry><entry>...<entry><end>
  *  其中：
- *      <lpbytes>记录了
+ *      <lpbytes>记录了 当前`listpack`占用的字节数，长度为4个字节；
+ *      `<size>`: 表示当前`listpack`中元素的数量，长度为2个字节；
+ *      `<end>`: 结束标识符，其值恒为`0xff`, 1个字节；
  *  listpack中的entry组成为:
  *      <encoding><content><backlen>
  * */
@@ -766,9 +774,10 @@ unsigned char *lpInsert(unsigned char *lp, unsigned char *ele, uint32_t size, un
      * Whatever the returned encoding is, 'enclen' is populated with the
      * length of the encoded element. */
     // 【2】 lpEncodeGetType函数对插入元素内容进行编码，返回编码类型，编码类型有 LP_ENCODING_INT（数值编码）和 LP_ENCODING_STRING（字符串编码） 两种。
-    // 该函数处理成功后，会将元素编码（encode属性） 存储在 intenc 变量中（数值时为具体的编码，字符串则该值为空），元素长度存储在enclen变量中（这个长度为编码长度+字符串内容长度）
+    // 该函数处理成功后，会将元素编码（encode属性） 存储在 intenc 变量中（数值时为具体的编码，字符串则该值为空），元素长度存储在enclen变量中（这个长度为编码长度+字符串内容长度，注意是值，不是字段宽度）
     int enctype;
     if (ele) {
+        // enctype为编码类型，整数编码或字符串
         enctype = lpEncodeGetType(ele,size,intenc,&enclen);
     } else {
         enctype = -1;
@@ -778,7 +787,7 @@ unsigned char *lpInsert(unsigned char *lp, unsigned char *ele, uint32_t size, un
     /* We need to also encode the backward-parsable length of the element
      * and append it to the end: this allows to traverse the listpack from
      * the end to the start. */
-    // 【3】 lpEncodeBacklen 函数将插入的元素长度 enclen（这个长度为编码长度+字符串内容长度）转化为backlen属性，并将其记录在backlen参数中，返回backlen属性占用的字节数
+    // 【3】 lpEncodeBacklen 函数将插入的元素长度 enclen（这个长度为编码长度+字符串内容长度）转化为backlen属性，并将其记录在backlen参数中，返回backlen属性占用的字节数（也即是元素length部分的宽度）
     unsigned long backlen_size = ele ? lpEncodeBacklen(backlen,enclen) : 0;
     // 【4】 计算新的listpack占用的空间 new_listpack_bytes
     uint64_t old_listpack_bytes = lpGetTotalBytes(lp);
@@ -792,6 +801,7 @@ unsigned char *lpInsert(unsigned char *lp, unsigned char *ele, uint32_t size, un
         ASSERT_INTEGRITY_LEN(lp, p, replaced_len);
     }
 
+    // new_listpack_bytes的组成为：原来的listpack占用的空间 + 插入元素的编码长度(即编码类型和元素内容被编码后占用的长度，其实就是enclen) + backlen属性占用的字节数 - 替换的元素的长度
     uint64_t new_listpack_bytes = old_listpack_bytes + enclen + backlen_size
                                   - replaced_len;
     if (new_listpack_bytes > UINT32_MAX) return NULL;
@@ -861,8 +871,8 @@ unsigned char *lpInsert(unsigned char *lp, unsigned char *ele, uint32_t size, un
             // 否则调用 lpEncodeString 函数，依次写入元素编码和元素内容
             lpEncodeString(dst,ele,size);
         }
-        // 【10】 写入backlen属性
-        dst += enclen;
+        // 【10】 写入backlen属性，即写入最后的length部分
+        dst += enclen; // dst本来指向插入位置或者替换元素的位置起始地址，现在指向插入元素或替换元素的末尾，也是length部分的起始地址
         memcpy(dst,backlen,backlen_size);
         dst += backlen_size;
     }
