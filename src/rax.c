@@ -624,7 +624,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
             return 0;
         }
 
-        // 如果插入节点本来就是key，则根据overwrite参数替换节点值
+        // 如果插入节点本来就是key，则【根据overwrite参数替换节点值】
         /* Update the existing key if there is already one. */
         if (h->iskey) {
             // 获得插入节点的value部分的指针

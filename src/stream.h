@@ -9,15 +9,15 @@
  * millisecond if the clock jumped backward) will use the millisecond time
  * of the latest generated ID and an incremented sequence. */
 typedef struct streamID {
-    uint64_t ms;        /* Unix time in milliseconds. */
-    uint64_t seq;       /* Sequence number. */
+    uint64_t ms;        /* Unix time in milliseconds. 毫秒级别的时间戳*/
+    uint64_t seq;       /* Sequence number. 序号，如果在1ms之内添加了多条消息，则递增序号*/
 } streamID;
 
 typedef struct stream {
-    rax *rax;               /* The radix tree holding the stream. */
-    uint64_t length;        /* Number of elements inside this stream. */
-    streamID last_id;       /* Zero if there are yet no items. */
-    rax *cgroups;           /* Consumer groups dictionary: name -> streamCG */
+    rax *rax;               /* The radix tree holding the stream.  存放消息内容，该rax中key为消息id, 值指向listpack */
+    uint64_t length;        /* Number of elements inside this stream. 该消息流中消息的数量 */
+    streamID last_id;       /* Zero if there are yet no items.  消息流中最新的消息id*/
+    rax *cgroups;           /* Consumer groups dictionary: name -> streamCG  存放消息组，该rax中key为消费者名，值指向StreamCG变量*/
 } stream;
 
 /* We define an iterator to iterate stream items in an abstract way, without
@@ -51,39 +51,39 @@ typedef struct streamIterator {
 typedef struct streamCG {
     streamID last_id;       /* Last delivered (not acknowledged) ID for this
                                group. Consumers that will just ask for more
-                               messages will served with IDs > than this. */
+                               messages will served with IDs > than this. 该消费组最新读取的消息id(已读取未确认)---lost_delivered_id */
     rax *pel;               /* Pending entries list. This is a radix tree that
                                has every message delivered to consumers (without
                                the NOACK option) that was yet not acknowledged
                                as processed. The key of the radix tree is the
                                ID as a 64 bit big endian number, while the
-                               associated value is a streamNACK structure.*/
+                               associated value is a streamNACK structure. 该消费组中所有待确认的消息， rax树的键是消息ID，而相关联的值是一个streamNACK结构 */
     rax *consumers;         /* A radix tree representing the consumers by name
                                and their associated representation in the form
-                               of streamConsumer structures. */
+                               of streamConsumer structures. 该消费组中所有的消费者，Rax类型，Rax键为消费者的名称，Rax值指向streamConsumer */
 } streamCG;
 
 /* A specific consumer in a consumer group.  */
 typedef struct streamConsumer {
-    mstime_t seen_time;         /* Last time this consumer was active. */
+    mstime_t seen_time;         /* Last time this consumer was active. 该消费者上一次活跃时间 */
     sds name;                   /* Consumer name. This is how the consumer
                                    will be identified in the consumer group
-                                   protocol. Case sensitive. */
+                                   protocol. Case sensitive. 消费者名称，消费组中通过该名称区分消费者，name区分大小写 */
     rax *pel;                   /* Consumer specific pending entries list: all
                                    the pending messages delivered to this
                                    consumer not yet acknowledged. Keys are
                                    big endian message IDs, while values are
                                    the same streamNACK structure referenced
                                    in the "pel" of the consumer group structure
-                                   itself, so the value is shared. */
+                                   itself, so the value is shared. 归属该消费者的所有待确认的消息. 键是大端序表示的消息id，而值是 streamCG结构中的“pel”中引用的streamNACK结构，因此值是共享的 */
 } streamConsumer;
 
 /* Pending (yet not acknowledged) message in a consumer group. */
 typedef struct streamNACK {
-    mstime_t delivery_time;     /* Last time this message was delivered. */
-    uint64_t delivery_count;    /* Number of times this message was delivered.*/
+    mstime_t delivery_time;     /* Last time this message was delivered. 消费发送给消费者的最新时间 */
+    uint64_t delivery_count;    /* Number of times this message was delivered. 消息发送给消费者的次数 */
     streamConsumer *consumer;   /* The consumer this message was delivered to
-                                   in the last delivery. */
+                                   in the last delivery. 消息属于哪个消费者 */
 } streamNACK;
 
 /* Stream propagation informations, passed to functions in order to propagate
