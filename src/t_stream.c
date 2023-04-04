@@ -272,7 +272,11 @@ unsigned char *lpReplaceInteger(unsigned char *lp, unsigned char **pos, int64_t 
  * the string if needed.
  * The 'valid" argument is an optional output parameter to get an indication
  * if the record was valid, when this parameter is NULL, the function will
- * fail with an assertion. */
+ * fail with an assertion.
+ * 翻译：
+ * 这是一个包装函数，用于从listpack（可能将数字存储为字符串）中直接获取整数值，如果需要，将字符串转换为整数。
+ * 'valid'参数是一个可选的输出参数，用于获取记录是否有效的指示，当此参数为NULL时，函数将失败并断言。
+ * */
 static inline int64_t lpGetIntegerIfValid(unsigned char *ele, int *valid) {
     int64_t v;
     unsigned char *e = lpGet(ele,&v,NULL);
@@ -483,6 +487,7 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
         sds ele = argv[i]->ptr;
         totelelen += sdslen(ele);
     }
+    // 这里校验我们添加的元素长度不能超出一个listpack所能容纳的最大长度，因为很显然，一个消息不可能不能分布到两个listpack中，所以当然消息长度不能超出一个listpack的最大长度
     if (totelelen > STREAM_LISTPACK_MAX_SIZE) {
         errno = ERANGE;
         return C_ERR;
@@ -501,7 +506,7 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
 
     // raxNext函数负责获取当前迭代器指向的节点的下一个节点，如果当前节点是Rax中最大的节点，则返回0。
     // 前面的raxSeek函数已经将迭代器定位到Rax中最大的节点，再次调用raxNext会不会有问题呢？
-    // 答案是没有问题的，因为raxSeek函数会给Rax迭代器添加一个Rax_ITER_JUST_SEEKED标志，如果raxNext函数检测到这个标志，则会将这个标志清除，并且不会执行任何操作，直接返回0
+    // 答案是没有问题的，因为raxSeek函数会给Rax迭代器添加一个Rax_ITER_JUST_SEEKED标志，如果raxNext函数检测到这个标志，则会将这个标志清除，并且不会执行任何操作，直接返回1
     // 所以raxNext函数通常会紧跟在raxSeek函数后面被调用
     /* Get a reference to the tail node listpack. */
     if (raxNext(&ri)) {
@@ -565,17 +570,21 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
     /* First of all, check if we can append to the current macro node or
      * if we need to switch to the next one. 'lp' will be set to NULL if
      * the current node is full. */
-    // 【4】 如果listpack的大小超过了server.stream_node_max_bytes或者listpack中的消息数量超过了server.stream_node_max_entries，则认为listpack已满,
+    // 【4】 如果listpack的大小超过了server.stream_node_max_bytes(默认4096) 或者listpack中的消息数量超过了server.stream_node_max_entries(默认100)，则认为listpack已满,
     // 需要将消息放置到新的listpack中，所以这里将listpack指针设置为NULL将lp设置为NULL
     if (lp != NULL) {
+        // 4096
         size_t node_max_bytes = server.stream_node_max_bytes;
         if (node_max_bytes == 0 || node_max_bytes > STREAM_LISTPACK_MAX_SIZE)
             node_max_bytes = STREAM_LISTPACK_MAX_SIZE;
         if (lp_bytes + totelelen >= node_max_bytes) {
             lp = NULL;
         } else if (server.stream_node_max_entries) {
+            // 第一个entry的地址,其实是主条目的首地址
             unsigned char *lp_ele = lpFirst(lp);
-            /* Count both live entries and deleted ones. */
+            /* Count both live entries and deleted ones.
+             *  `count`和`deleted`属性记录`listpack`中 有效的消息数量和标记为已删除的消息数量 ，所以`listpack`中的消息数量为`count+deleted`
+             * */
             int64_t count = lpGetInteger(lp_ele) + lpGetInteger(lpNext(lp,lp_ele));
             if (count >= server.stream_node_max_entries) {
                 /* Shrink extra pre-allocated memory */
@@ -605,6 +614,7 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
         if (server.stream_node_max_bytes > 0 && server.stream_node_max_bytes < prealloc) {
             prealloc = server.stream_node_max_bytes;
         }
+        // 返回的lp指针指向了新建的listpack的首地址，也就是total_bytes部分开始的地址
         lp = lpNew(prealloc);
         lp = lpAppendInteger(lp,1); /* One item, the one we are adding. 设置主条目的count值为1  */
         lp = lpAppendInteger(lp,0); /* Zero deleted so far. 设置主条目的deleted值为0 */
@@ -613,7 +623,7 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
             sds field = argv[i*2]->ptr;
             lp = lpAppend(lp,(unsigned char*)field,sdslen(field)); // 设置主条目的字段列表
         }
-        lp = lpAppendInteger(lp,0); /* Master entry zero terminator. 主条目的结束标记 */
+        lp = lpAppendInteger(lp,0); /* Master entry zero terminator. 主条目的结束标记0 */
         // 插入到rax中
         raxInsert(s->rax,(unsigned char*)&rax_key,sizeof(rax_key),lp,NULL);
         /* The first entry we insert, has obviously the same fields of the
@@ -681,7 +691,11 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
      * that compose the entry, so that it's possible to travel the entry
      * in reverse order: we can just start from the end of the listpack, read
      * the entry, and jump back N times to seek the "flags" field to read
-     * the stream full entry. */
+     * the stream full entry.
+     * 翻译一下上面的注释：
+     * lp-count字段是一个数字，它表示组成条目的listpack片段的数量，因此可以按逆序遍历条目：
+     * 我们可以从listpack的末尾开始，读取条目，然后向后跳转N次，以查找“flags”字段以读取流完整条目。
+     * */
     // 【7】 将消息内容写到listpack中，如果消息属性与主条目不一致，则消息格式如表下所示：
         // +-----+--------+----------+-------+-------+-/-+-------+-------+--------+
         // |flags|entry-id|num-fields|field-1|value-1|...|field-N|value-N|lp-count|
@@ -696,8 +710,8 @@ int streamAppendItem(stream *s, robj **argv, int64_t numfields, streamID *added_
         // |ms-diff |seq-diff  |
         // +--------+----------+
     // 最后一个属性lp-count，记录了存储该消息内容使用了多少个listpack元素，用于反向便利listpack时读取消息内容
-    lp = lpAppendInteger(lp,flags);
-    lp = lpAppendInteger(lp,id.ms - master_id.ms);
+    lp = lpAppendInteger(lp,flags); // 写入是否与主条目属性一致的标识 STREAM_ITEM_FLAG_SAMEFIELDS/
+    lp = lpAppendInteger(lp,id.ms - master_id.ms); //
     lp = lpAppendInteger(lp,id.seq - master_id.seq);
     if (!(flags & STREAM_ITEM_FLAG_SAMEFIELDS))
         // 如果消息属性列表与主条目不一致，则需要记录消息属性的数量

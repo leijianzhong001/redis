@@ -519,7 +519,9 @@ unsigned char *lpSkip(unsigned char *p) {
 
 /* If 'p' points to an element of the listpack, calling lpNext() will return
  * the pointer to the next element (the one on the right), or NULL if 'p'
- * already pointed to the last element of the listpack. */
+ * already pointed to the last element of the listpack.
+ * 翻译：如果p指向listpack的元素，调用lpNext()将返回指向下一个元素的指针（右边的元素），如果p已经指向listpack的最后一个元素，则返回NULL。
+ * */
 unsigned char *lpNext(unsigned char *lp, unsigned char *p) {
     assert(p);
     p = lpSkip(p);
@@ -545,6 +547,7 @@ unsigned char *lpPrev(unsigned char *lp, unsigned char *p) {
 /* Return a pointer to the first element of the listpack, or NULL if the
  * listpack has no elements. */
 unsigned char *lpFirst(unsigned char *lp) {
+    // 跳过totol_bytes和size两个字段
     unsigned char *p = lp + LP_HDR_SIZE; /* Skip the header. */
     if (p[0] == LP_EOF) return NULL;
     lpAssertValidEntry(lp, lpBytes(lp), p);
@@ -914,10 +917,13 @@ unsigned char *lpInsert(unsigned char *lp, unsigned char *ele, uint32_t size, un
 
 /* Append the specified element 'ele' of length 'len' at the end of the
  * listpack. It is implemented in terms of lpInsert(), so the return value is
- * the same as lpInsert(). */
+ * the same as lpInsert().
+ * 在listpack的末尾追加长度为'len'的指定元素'ele'。它是通过lpInsert()实现的，因此返回值与lpInsert()相同。
+ * */
 unsigned char *lpAppend(unsigned char *lp, unsigned char *ele, uint32_t size) {
     uint64_t listpack_bytes = lpGetTotalBytes(lp);
     unsigned char *eofptr = lp + listpack_bytes - 1;
+    // 最后的动作转换为在eof标志之前插入
     return lpInsert(lp,ele,size,eofptr,LP_BEFORE,NULL);
 }
 
