@@ -17,7 +17,7 @@ typedef struct stream {
     rax *rax;               /* The radix tree holding the stream.  存放消息内容，该rax中key为消息id, 值指向listpack */
     uint64_t length;        /* Number of elements inside this stream. 该消息流中消息的数量 */
     streamID last_id;       /* Zero if there are yet no items.  消息流中最新的消息id*/
-    rax *cgroups;           /* Consumer groups dictionary: name -> streamCG  存放消息组，该rax中key为消费者名，值指向StreamCG变量*/
+    rax *cgroups;           /* Consumer groups dictionary: name -> streamCG  存放消息组，该rax中key为消费者组名，值指向StreamCG变量*/
 } stream;
 
 /* We define an iterator to iterate stream items in an abstract way, without
@@ -80,7 +80,7 @@ typedef struct streamConsumer {
 
 /* Pending (yet not acknowledged) message in a consumer group. */
 typedef struct streamNACK {
-    mstime_t delivery_time;     /* Last time this message was delivered. 消费发送给消费者的最新时间 */
+    mstime_t delivery_time;     /* Last time this message was delivered. 消息发送给消费者的最新时间 */
     uint64_t delivery_count;    /* Number of times this message was delivered. 消息发送给消费者的次数 */
     streamConsumer *consumer;   /* The consumer this message was delivered to
                                    in the last delivery. 消息属于哪个消费者 */

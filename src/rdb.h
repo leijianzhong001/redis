@@ -102,7 +102,7 @@
 #define RDB_OPCODE_FREQ       249   /* LFU frequency. */
 #define RDB_OPCODE_AUX        250   /* RDB aux field. */
 #define RDB_OPCODE_RESIZEDB   251   /* Hash table resize hint. */
-#define RDB_OPCODE_EXPIRETIME_MS 252    /* Expire time in milliseconds. */
+#define RDB_OPCODE_EXPIRETIME_MS 252    /* Expire time in milliseconds. 0xFC */
 #define RDB_OPCODE_EXPIRETIME 253       /* Old expire time in seconds. */
 #define RDB_OPCODE_SELECTDB   254   /* DB number of the following keys. */
 #define RDB_OPCODE_EOF        255   /* End of the RDB file. */

@@ -126,7 +126,7 @@ time_t rdbLoadTime(rio *rdb) {
 
 int rdbSaveMillisecondTime(rio *rdb, long long t) {
     int64_t t64 = (int64_t) t;
-    memrev64ifbe(&t64); /* Store in little endian. */
+    memrev64ifbe(&t64); /* Store in little endian. 小端序 */
     return rdbWriteRaw(rdb,&t64,8);
 }
 
@@ -155,23 +155,37 @@ long long rdbLoadMillisecondTime(rio *rdb, int rdbver) {
 
 /* Saves an encoded length. The first two bits in the first byte are used to
  * hold the encoding type. See the RDB_* definitions for more information
- * on the types of encoding. */
+ * on the types of encoding.
+ * 保存字符串长度，采用整形编码。第一个字节的前两位用来保存编码类型。有关编码类型的更多信息，请参阅RDB_定义。
+ * - 该部分为了尽量缩短字节数，采用可变字节编码方法。rdb 文件中频繁使用该算法。 主要用于在二进制文件中存储下一个对象的长度，如在编码一个 key 时，使用该方法在 key 的前几个 byte 存储该 key 占用字节数。
+ * - 具体算法：
+ *       1. 从高位开始，读取第一个 byte 的前 2 bit。
+ *       2. 如果高位以 00 开始：当前 byte 剩余 6 bit 表示一个整数。
+ *       3. 如果高位以 01 开始：当前 byte 剩余 6 bit，加上接下来的 8 bit 表示一个整数。
+ *       4. 如果高位以 10 开始：忽略当前 byte 剩余的 6 bit，接下来的 4 byte 表示一个整数。
+ *       5. 如果高位以 10 开始, 并且剩下的`6bit`的值为1：接下来的 8 byte 表示一个整数。
+ *       6. 如果高位以 11 开始：特殊编码格式，剩余 6 bit 用于表示该格式。
+ * */
 int rdbSaveLen(rio *rdb, uint64_t len) {
     unsigned char buf[2];
     size_t nwritten;
 
-    if (len < (1<<6)) {
+    if (len < (1<<6)) { // len < 64
         /* Save a 6 bit len */
-        buf[0] = (len&0xFF)|(RDB_6BITLEN<<6);
+        buf[0] = (len&0xFF)|(RDB_6BITLEN<<6); // 如果高位以 00 开始：当前 byte 剩余 6 bit 表示一个整数。
         if (rdbWriteRaw(rdb,buf,1) == -1) return -1;
         nwritten = 1;
-    } else if (len < (1<<14)) {
-        /* Save a 14 bit len */
-        buf[0] = ((len>>8)&0xFF)|(RDB_14BITLEN<<6);
+    } else if (len < (1<<14)) { // len < 16384
+        /* Save a 14 bit len
+         * 如果高位以 01 开始：当前 byte 剩余 6 bit，加上接下来的 8 bit 表示一个整数。
+         * 例如：len = 1000， 其二进制为 00000011 11101000，(len>>8)&0xFF 以后即为 00000011
+         * RDB_14BITLEN<<6 为 01000000， 两者或上以后即为 01000011 11101000
+         * */
+        buf[0] = ((len>>8)&0xFF)|(RDB_14BITLEN<<6); // (len>>8)&0xFF 用来取高八位，高八位或上整数编码 01就是完整的长度编码
         buf[1] = len&0xFF;
         if (rdbWriteRaw(rdb,buf,2) == -1) return -1;
         nwritten = 2;
-    } else if (len <= UINT32_MAX) {
+    } else if (len <= UINT32_MAX) { // len < 4294967295
         /* Save a 32 bit len */
         buf[0] = RDB_32BITLEN;
         if (rdbWriteRaw(rdb,buf,1) == -1) return -1;
@@ -249,19 +263,31 @@ uint64_t rdbLoadLen(rio *rdb, int *isencoded) {
 /* Encodes the "value" argument as integer when it fits in the supported ranges
  * for encoded types. If the function successfully encodes the integer, the
  * representation is stored in the buffer pointer to by "enc" and the string
- * length is returned. Otherwise 0 is returned. */
+ * length is returned. Otherwise 0 is returned.
+ * 翻译一下：
+ * 当value的值在支持的范围内时，将value编码为整数。如果函数成功地编码了整数，
+ * 则将表示存储在enc指向的缓冲区中，并返回字符串长度。否则返回0。
+ *
+ * 下面的编码方式还是经典的整形字符串编码
+ *      最高 2 bit 为 11 ，剩余 6 bit 为数 0、1、2 时：
+ *      字符串整型编码方法。 **<font color=00ff00>当字符串长度小于11字节时，尝试进行整数编码</font>**。 为啥是11字节呢？ 因为最长整数编码是使用4字节，4字节表示范围`[-2147483648，2147483647]`，转换为字符串加上负号就刚好11字节。
+ *           - 为 `0` 时：之后 `8 bit` 用于存储该整型。
+ *           - 为 `1` 时：之后 `16 bit` 用于存储该整型。
+ *           - 为 `2` 时：之后 `32 bit` 用于存储该整型。
+ * */
 int rdbEncodeInteger(long long value, unsigned char *enc) {
     if (value >= -(1<<7) && value <= (1<<7)-1) {
-        enc[0] = (RDB_ENCVAL<<6)|RDB_ENC_INT8;
-        enc[1] = value&0xFF;
+        // 如果value可以使用一个字节表示，那么将value编码为RDB_ENC_INT8类型
+        enc[0] = (RDB_ENCVAL<<6)|RDB_ENC_INT8; // 11000000
+        enc[1] = value&0xFF; // 这里&0xFF的作用主要是为了取低八位
         return 2;
     } else if (value >= -(1<<15) && value <= (1<<15)-1) {
-        enc[0] = (RDB_ENCVAL<<6)|RDB_ENC_INT16;
-        enc[1] = value&0xFF;
-        enc[2] = (value>>8)&0xFF;
+        enc[0] = (RDB_ENCVAL<<6)|RDB_ENC_INT16; // 11000001
+        enc[1] = value&0xFF; // 这里&0xFF的作用主要是为了取低八位
+        enc[2] = (value>>8)&0xFF; // 这里>>8的作用主要是为了取高八位
         return 3;
     } else if (value >= -((long long)1<<31) && value <= ((long long)1<<31)-1) {
-        enc[0] = (RDB_ENCVAL<<6)|RDB_ENC_INT32;
+        enc[0] = (RDB_ENCVAL<<6)|RDB_ENC_INT32; // 11000010
         enc[1] = value&0xFF;
         enc[2] = (value>>8)&0xFF;
         enc[3] = (value>>16)&0xFF;
@@ -315,30 +341,47 @@ void *rdbLoadIntegerObject(rio *rdb, int enctype, int flags, size_t *lenptr) {
 
 /* String objects in the form "2391" "-100" without any space and with a
  * range of values that can fit in an 8, 16 or 32 bit signed value can be
- * encoded as integers to save space */
+ * encoded as integers to save space
+ * 翻译一下：
+ *      形如"2391" "-100"的字符串对象，没有空格，且值在8位，16位，32位有符号整数的范围内，可以被编码为整数，以节省空间
+ * */
 int rdbTryIntegerEncoding(char *s, size_t len, unsigned char *enc) {
     long long value;
     char *endptr, buf[32];
 
-    /* Check if it's possible to encode this value as a number */
+    /* Check if it's possible to encode this value as a number
+     * 翻译一下：
+     *     检查是否可以将这个值编码为一个数字
+     * */
     value = strtoll(s, &endptr, 10);
     if (endptr[0] != '\0') return 0;
     ll2string(buf,32,value);
 
     /* If the number converted back into a string is not identical
-     * then it's not possible to encode the string as integer */
+     * then it's not possible to encode the string as integer
+     * 翻译一下：
+     *    如果将数字转换回字符串后，字符串不相同，则无法将字符串编码为整数
+     * */
     if (strlen(buf) != len || memcmp(buf,s,len)) return 0;
 
     return rdbEncodeInteger(value,enc);
 }
 
+/**
+ *
+ * 最高 2 bit 为 11 ，剩余 6 bit 为数 3 时：
+ *      - 压缩字符串编码方法。 该类型的解码具体方法：
+ *           1. 使用[整数编码](https://github.com/dalei2019/redis-study/blob/main/docs/redis-rdb-format.md#整数编码)方法编码压缩后字符串长度，表示为 `compressed_len`。
+ *           2. 使用[整数编码](https://github.com/dalei2019/redis-study/blob/main/docs/redis-rdb-format.md#整数编码)方法编码未压缩字符串长度，表示为 `origin_len`。
+ *           3. 写入 `compressed_len` 个字节的压缩字符串。
+ */
 ssize_t rdbSaveLzfBlob(rio *rdb, void *data, size_t compress_len,
                        size_t original_len) {
     unsigned char byte;
     ssize_t n, nwritten = 0;
 
     /* Data compressed! Let's save it on disk */
-    byte = (RDB_ENCVAL<<6)|RDB_ENC_LZF;
+    byte = (RDB_ENCVAL<<6)|RDB_ENC_LZF; //  11000011  最高 2 bit 为 11 ，剩余 6 bit 为 3时，表示压缩字符串编码方法
     if ((n = rdbWriteRaw(rdb,&byte,1)) == -1) goto writeerr;
     nwritten += n;
 
@@ -428,12 +471,22 @@ err:
 }
 
 /* Save a string object as [len][data] on disk. If the object is a string
- * representation of an integer value we try to save it in a special form */
+ * representation of an integer value we try to save it in a special form
+ * 在磁盘上将字符串对象保存为[len][data]。如果对象是整数值的字符串表示形式，则尝试将其保存为特殊形式
+ *
+ * 这个函数在写入内容的时候，采用的是标准的RDB的字符串编码
+ *      - 简单的长度前缀编码字符
+ *      - 使用字符串编码整型
+ *      - 压缩字符串
+ * 这三者均以[整数编码]编码表示字符串长度，之后存储具体字符串编码。
+ * */
 ssize_t rdbSaveRawString(rio *rdb, unsigned char *s, size_t len) {
     int enclen;
     ssize_t n, nwritten = 0;
 
-    /* Try integer encoding */
+    /* Try integer encoding
+     * 字符串整形编码。 整形的 32bit 最大可以表示长度为11的有符号整数
+     * */
     if (len <= 11) {
         unsigned char buf[5];
         if ((enclen = rdbTryIntegerEncoding((char*)s,len,buf)) > 0) {
@@ -443,7 +496,11 @@ ssize_t rdbSaveRawString(rio *rdb, unsigned char *s, size_t len) {
     }
 
     /* Try LZF compression - under 20 bytes it's unable to compress even
-     * aaaaaaaaaaaaaaaaaa so skip it */
+     * aaaaaaaaaaaaaaaaaa so skip it
+     * 翻译一下：
+     *   如果字符串长度小于20，且开启了压缩，则进行压缩
+     * 采用字符串压缩编码。
+     * */
     if (server.rdb_compression && len > 20) {
         n = rdbSaveLzfStringObject(rdb,s,len);
         if (n == -1) return -1;
@@ -451,11 +508,13 @@ ssize_t rdbSaveRawString(rio *rdb, unsigned char *s, size_t len) {
         /* Return value of 0 means data can't be compressed, save the old way */
     }
 
-    /* Store verbatim */
-    if ((n = rdbSaveLen(rdb,len)) == -1) return -1;
+    /* Store verbatim
+     * 简单长度前缀字符串方法。 长度编码后是字符串具体的编码，长度编码使用整形编码
+     * */
+    if ((n = rdbSaveLen(rdb,len)) == -1) return -1; // 写入长度
     nwritten += n;
     if (len > 0) {
-        if (rdbWriteRaw(rdb,s,len) == -1) return -1;
+        if (rdbWriteRaw(rdb,s,len) == -1) return -1; // 写入实际的字符串
         nwritten += len;
     }
     return nwritten;
@@ -714,11 +773,14 @@ int rdbLoadObjectType(rio *rdb) {
  * just the IDs: this is useful because for the global consumer group PEL
  * we serialized the NACKs as well, but when serializing the local consumer
  * PELs we just add the ID, that will be resolved inside the global PEL to
- * put a reference to the same structure. */
+ * put a reference to the same structure.
+ * 这个辅助函数将消费者组 Pending Entries List (PEL)序列化到RDB文件中。
+ * 'nacks'参数告诉函数是否也持久化关于未确认消息的信息，或者是否只持久化ID: 这很有用，因为对于全局消费者组PEL，我们也序列化了nacks，但是当序列化本地消费者组PEL时，我们只添加ID，这将在全局PEL中被解析，以放置对相同结构的引用。
+ * */
 ssize_t rdbSaveStreamPEL(rio *rdb, rax *pel, int nacks) {
     ssize_t n, nwritten = 0;
 
-    /* Number of entries in the PEL. */
+    /* Number of entries in the PEL. 写入PEL中的消息数量 */
     if ((n = rdbSaveLen(rdb,raxSize(pel))) == -1) return -1;
     nwritten += n;
 
@@ -727,8 +789,11 @@ ssize_t rdbSaveStreamPEL(rio *rdb, rax *pel, int nacks) {
     raxStart(&ri,pel);
     raxSeek(&ri,"^",NULL,0);
     while(raxNext(&ri)) {
-        /* We store IDs in raw form as 128 big big endian numbers, like
-         * they are inside the radix tree key. */
+        /* We store IDs in raw form as 128 bit big endian numbers, like
+         * they are inside the radix tree key.
+         * 我们以原始形式将id存储为128个大端序数字，就像它们在rax树中的key一样
+         * */
+        // 写入消息id
         if ((n = rdbWriteRaw(rdb,ri.key,sizeof(streamID))) == -1) {
             raxStop(&ri);
             return -1;
@@ -737,11 +802,13 @@ ssize_t rdbSaveStreamPEL(rio *rdb, rax *pel, int nacks) {
 
         if (nacks) {
             streamNACK *nack = ri.data;
+            // 写入消息发送给消费者的最新时间， 小端序
             if ((n = rdbSaveMillisecondTime(rdb,nack->delivery_time)) == -1) {
                 raxStop(&ri);
                 return -1;
             }
             nwritten += n;
+            // 写入消息发送给消费者的次数
             if ((n = rdbSaveLen(rdb,nack->delivery_count)) == -1) {
                 raxStop(&ri);
                 return -1;
@@ -749,7 +816,9 @@ ssize_t rdbSaveStreamPEL(rio *rdb, rax *pel, int nacks) {
             nwritten += n;
             /* We don't save the consumer name: we'll save the pending IDs
              * for each consumer in the consumer PEL, and resolve the consumer
-             * at loading time. */
+             * at loading time.
+             * 我们不保存消费者名称:我们将在消费者PEL中保存每个消费者的 pending id，并在加载时解析消费者。
+             * */
         }
     }
     raxStop(&ri);
@@ -758,11 +827,13 @@ ssize_t rdbSaveStreamPEL(rio *rdb, rax *pel, int nacks) {
 
 /* Serialize the consumers of a stream consumer group into the RDB. Helper
  * function for the stream data type serialization. What we do here is to
- * persist the consumer metadata, and it's PEL, for each consumer. */
+ * persist the consumer metadata, and it's PEL, for each consumer.
+ * 将流消费者组的消费者序列化到RDB中。用于stream数据类型序列化的辅助函数。我们在这里所做的是为每个消费者持久化消费者元数据，它是PEL。
+ * */
 size_t rdbSaveStreamConsumers(rio *rdb, streamCG *cg) {
     ssize_t n, nwritten = 0;
 
-    /* Number of consumers in this consumer group. */
+    /* Number of consumers in this consumer group. 保存当前消费者组中的消费者数量 */
     if ((n = rdbSaveLen(rdb,raxSize(cg->consumers))) == -1) return -1;
     nwritten += n;
 
@@ -773,14 +844,14 @@ size_t rdbSaveStreamConsumers(rio *rdb, streamCG *cg) {
     while(raxNext(&ri)) {
         streamConsumer *consumer = ri.data;
 
-        /* Consumer name. */
+        /* Consumer name. 消费者名称 */
         if ((n = rdbSaveRawString(rdb,ri.key,ri.key_len)) == -1) {
             raxStop(&ri);
             return -1;
         }
         nwritten += n;
 
-        /* Last seen time. */
+        /* Last seen time.  该消费者上一次活跃时间 */
         if ((n = rdbSaveMillisecondTime(rdb,consumer->seen_time)) == -1) {
             raxStop(&ri);
             return -1;
@@ -790,7 +861,10 @@ size_t rdbSaveStreamConsumers(rio *rdb, streamCG *cg) {
         /* Consumer PEL, without the ACKs (see last parameter of the function
          * passed with value of 0), at loading time we'll lookup the ID
          * in the consumer group global PEL and will put a reference in the
-         * consumer local PEL. */
+         * consumer local PEL.
+         * 翻译一下：消费者PEL，没有ACKs(参见函数的最后一个参数，传递值为0)，在加载时，我们将在消费者组全局PEL中查找ID，并将引用放在消费者本地PEL中。
+         * 说的是消费者在保存自己的pel时，这里不会存储具体的 streamNACK 结构，而是只存储一个消息id， 最终在加载消息时，从消费者组全局的PEL中找到这个消息id，然后将这个消息id对应的streamNACK结构放到消费者本地的PEL中。
+         * */
         if ((n = rdbSaveStreamPEL(rdb,consumer->pel,0)) == -1) {
             raxStop(&ri);
             return -1;
@@ -945,25 +1019,31 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key) {
         }
     } else if (o->type == OBJ_STREAM) {
         /* Store how many listpacks we have inside the radix tree. */
-        stream *s = o->ptr;
-        rax *rax = s->rax;
+        stream *s = o->ptr; // 当前stream对象
+        rax *rax = s->rax; // 存数据的rax树
+        // 写入rax树中key的数量，
         if ((n = rdbSaveLen(rdb,raxSize(rax))) == -1) return -1;
         nwritten += n;
 
         /* Serialize all the listpacks inside the radix tree as they are,
          * when loading back, we'll use the first entry of each listpack
-         * to insert it back into the radix tree. */
+         * to insert it back into the radix tree.
+         * 翻译：将rax树中的所有listpack序列化，当重新加载时，我们将使用每个listpack的第一个条目将其插入到rax树中。
+         * */
         raxIterator ri;
         raxStart(&ri,rax);
         raxSeek(&ri,"^",NULL,0);
         while (raxNext(&ri)) {
+            // 这是这个listpack
             unsigned char *lp = ri.data;
             size_t lp_bytes = lpBytes(lp);
+            // 写入rax中的key, 也就是【消息id】，这个消息id是当前 listpack 中最小的消息id
             if ((n = rdbSaveRawString(rdb,ri.key,ri.key_len)) == -1) {
                 raxStop(&ri);
                 return -1;
             }
             nwritten += n;
+            // 将listpack作为一个字符串写入到rdb文件中
             if ((n = rdbSaveRawString(rdb,lp,lp_bytes)) == -1) {
                 raxStop(&ri);
                 return -1;
@@ -974,7 +1054,10 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key) {
 
         /* Save the number of elements inside the stream. We cannot obtain
          * this easily later, since our macro nodes should be checked for
-         * number of items: not a great CPU / space tradeoff. */
+         * number of items: not a great CPU / space tradeoff.
+         * 翻译一下：保存stream中的消息数量。我们不能很容易地获得这个，因为我们的宏节点应该检查项目的数量：不是很好的CPU/内存占用权衡。
+         * */
+        // 写入消息数量
         if ((n = rdbSaveLen(rdb,s->length)) == -1) return -1;
         nwritten += n;
         /* Save the last entry ID. */
@@ -987,6 +1070,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key) {
          * type, so serialize every consumer group. */
 
         /* Save the number of groups. */
+        // 写入消费者组数量
         size_t num_cgroups = s->cgroups ? raxSize(s->cgroups) : 0;
         if ((n = rdbSaveLen(rdb,num_cgroups)) == -1) return -1;
         nwritten += n;
@@ -998,14 +1082,14 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key) {
             while(raxNext(&ri)) {
                 streamCG *cg = ri.data;
 
-                /* Save the group name. */
+                /* Save the group name. 写入消费者组名 */
                 if ((n = rdbSaveRawString(rdb,ri.key,ri.key_len)) == -1) {
                     raxStop(&ri);
                     return -1;
                 }
                 nwritten += n;
 
-                /* Last ID. */
+                /* Last ID. 写入 该消费组最新读取的消息id(已读取未确认)---lost_delivered_id */
                 if ((n = rdbSaveLen(rdb,cg->last_id.ms)) == -1) {
                     raxStop(&ri);
                     return -1;
@@ -1017,14 +1101,14 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key) {
                 }
                 nwritten += n;
 
-                /* Save the global PEL. */
+                /* Save the global PEL. 写入该消费组中所有待确认的消息， rax树的键是消息ID，而相关联的值是一个streamNACK结构 */
                 if ((n = rdbSaveStreamPEL(rdb,cg->pel,1)) == -1) {
                     raxStop(&ri);
                     return -1;
                 }
                 nwritten += n;
 
-                /* Save the consumers of this group. */
+                /* Save the consumers of this group. 保存消费者列表 ，Rax类型，Rax键为消费者的名称，Rax值指向streamConsumer */
                 if ((n = rdbSaveStreamConsumers(rdb,cg)) == -1) {
                     raxStop(&ri);
                     return -1;
@@ -1083,9 +1167,14 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime) {
     int savelfu = server.maxmemory_policy & MAXMEMORY_FLAG_LFU;
 
     // 【1】 如果设置了过期时间，则写入 RDB_OPCODE_EXPIRETIME_MS 标志和过期时间戳
+    // 如果有设置过期时间，则会存放具体过期时间的 `timestamp`。否则这部分不存在。 采用小端字节序编码
+    //      以 `0xFD` 开头，代表过期时间为秒，之后的 `4 byte` 表示该key 的过期时间。
+    //      以 `0xFC` 开头，代表过期时间为毫秒， 之后的 `8 byte` 表示该key 的过期时间
     /* Save the expire time */
     if (expiretime != -1) {
+        // 写入0xFC标记
         if (rdbSaveType(rdb,RDB_OPCODE_EXPIRETIME_MS) == -1) return -1;
+        // 写入具体的过期时间 expiretime类型为long， 8个字节
         if (rdbSaveMillisecondTime(rdb,expiretime) == -1) return -1;
     }
 
@@ -1094,6 +1183,7 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime) {
     if (savelru) {
         uint64_t idletime = estimateObjectIdleTime(val);
         idletime /= 1000; /* Using seconds is enough and requires less space.*/
+        // 写入0xF8
         if (rdbSaveType(rdb,RDB_OPCODE_IDLE) == -1) return -1;
         if (rdbSaveLen(rdb,idletime) == -1) return -1;
     }
@@ -1112,8 +1202,30 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime) {
 
     // 【3】 写入RDB键值对标志， 即对象类型标志。写入键内容，最后写入值内容
     /* Save type, key, value */
+    // 写入对象类型标志，对象类型标志的值是一个整数，占用1个字节，枚举如下：
+    //      RDB_TYPE_STRING 0
+    //      RDB_TYPE_LIST   1
+    //      RDB_TYPE_SET    2
+    //      RDB_TYPE_ZSET   3
+    //      RDB_TYPE_HASH   4
+    //      RDB_TYPE_ZSET_2 5
+    //      RDB_TYPE_MODULE 6
+    //      RDB_TYPE_MODULE_2 7
+    //      RDB_TYPE_HASH_ZIPMAP    9
+    //      RDB_TYPE_LIST_ZIPLIST  10
+    //      RDB_TYPE_SET_INTSET    11
+    //      RDB_TYPE_ZSET_ZIPLIST  12
+    //      RDB_TYPE_HASH_ZIPLIST  13
+    //      RDB_TYPE_LIST_QUICKLIST 14
+    //      RDB_TYPE_STREAM_LISTPACKS 15
     if (rdbSaveObjectType(rdb,val) == -1) return -1;
+    // 写入key  使用字符串编码方法编码 key
+    //      最高 2 bit 为 00、01、10 时, 简单长度前缀编码
+    //      最高 2 bit 为 11 ，剩余 6 bit 为数 0、1、2 时, 字符串整型编码
+    //      最高 2 bit 为 11 ，剩余 6 bit 为数 3 时, 压缩字符串编码
     if (rdbSaveStringObject(rdb,key) == -1) return -1;
+    // 写入value
+    // 依据 value 存储类型的不同，使用对应的[值编码]方法编码 value。 如当 value 存储为 0 时，value 使用字符串编码方法编码。 当 value 为 10 时，value 使用ziplist 编码方法编码。
     if (rdbSaveObject(rdb,val,key) == -1) return -1;
 
     /* Delay return if required (for testing) */

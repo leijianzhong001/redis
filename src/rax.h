@@ -140,9 +140,9 @@ typedef struct raxNode {
 } raxNode;
 
 typedef struct rax {
-    raxNode *head;
-    uint64_t numele;
-    uint64_t numnodes;
+    raxNode *head; // 头节点
+    uint64_t numele; // 完整的key的数量
+    uint64_t numnodes; // rax中节点的数量
 } rax;
 
 /* Stack data structure used by raxLowWalk() in order to, optionally, return
