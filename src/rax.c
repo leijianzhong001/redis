@@ -176,10 +176,10 @@ static inline void raxStackFree(raxStack *ts) {
 
 /* Return the pointer to the first child pointer.
  * 这里的算法是：
- *      (n)->data 是当前节点data数据结构开始的位置
+ *      (n)->data 是当前节点data数据结构开始的位置，类型是个 char data[]
  *      (n)->size 在非压缩节点表示的是子节点的个数，也即是当前节点中单字节路由键的个数；在压缩节点中表示的是压缩字符串的长度
  *      raxPadding  路由键对齐填充占用的字节数，主要和指针的长度对齐，路由键长度必须对齐到指针长度的倍数，所以要填充
- *      (n)->data + (n)->size 表示的就是当前节点第一个子节点的指针位置
+ *      (n)->data + (n)->size 表示的就是从数组的首地址开始，便宜size个字节，当前节点第一个子节点的指针位置
  * */
 #define raxNodeFirstChildPtr(n) ((raxNode**) ( \
     (n)->data + \
@@ -496,43 +496,66 @@ raxNode *raxCompressNode(raxNode *n, unsigned char *s, size_t len, raxNode **chi
  *      rax: 要遍历的rax树
  *      s：要查找的key
  *      len：要查找的key的长度
- *      **stopnode： 停止节点，即要查找的key的插入节点，插入节点即要查找的key与Rax键第一个不匹配的字符所在的节点
- *      ***plink:
+ *      **stopnode： 停止节点，即要查找的key的【插入节点】，插入节点即要查找的key与Rax键第一个不匹配的字符所在的节点
  *      splitpos: 拆分位置
- *      *ts：
+ *      *ts： NULL
+ *
+ *      parentlink: 插入节点的父节点必然存在一个子节点指针指向插入节点，parentlink 指向该子节点指针（parentlink是个二级指针，一个指针的作用是为了改变普通变量的值，二级指针的作用就是为了改变指针变量的值）。
+ *                  修改该位置的内容，可以变更父节点的子节点      ↓<--------------------------- **parentlink
+ *                                                           ↓
+ *                  父节点：[header iscompr=0][abc][a-ptr][b-ptr][c-ptr](value-ptr?)
+ *                                                           ↓
+ *                                                           ↓
+ *                  子节点：                                 [header iscompr=0][abc][a-ptr][b-ptr][c-ptr](value-ptr?)
+ *
+ *      ***plink:  ***plink是指向**parentlink的指针， 所以***plink是为了改变 **parentlink 变量的值，***plink和**parentlink的关系如下：
+ *                  修改该位置的内容，可以变更父节点的子节点      ↓<--------------------------- **parentlink <- ***parentlink
+ *                                                           ↓
+ *                  父节点：[header iscompr=0][abc][a-ptr][b-ptr][c-ptr](value-ptr?)
+ *                                                           ↓
+ *                                                           ↓
+ *                  子节点：                                 [header iscompr=0][abc][a-ptr][b-ptr][c-ptr](value-ptr?)
+ *
  * */
 static inline size_t raxLowWalk(rax *rax, unsigned char *s, size_t len, raxNode **stopnode, raxNode ***plink, int *splitpos, raxStack *ts) {
-    // 当前节点
+    // 当前节点， 刚开始就是rax树的头节点
     raxNode *h = rax->head;
     // 当前节点的父节点
     raxNode **parentlink = &rax->head;
 
-    size_t i = 0; /* Position in the string.  要查找的key的当前匹配位置*/
-    size_t j = 0; /* Position in the node children (or bytes if compressed). 要查找的key在当前节点的匹配位置*/
+    size_t i = 0; /* Position in the string.  要查找的key的当前匹配位置, 例如要查找的key是abc，那么比对到a，匹配位置就是0， 匹配到b， 匹配位置就是1*/
+    size_t j = 0; /* Position in the node children (or bytes if compressed). 要查找的key在当前节点的匹配位置。*/
     while(h->size && i < len) {
         debugnode("Lookup current node",h);
-        unsigned char *v = h->data;
+        unsigned char *v = h->data; // 当前节点的data部分
 
+        // 压缩节点机构：  [header iscompr=1][xyz][z-ptr](value-ptr?)
         if (h->iscompr) {
             // 如果是压缩节点，依次比对改节点所有字符，全部匹配，则沿着子节点往下查找
             for (j = 0; j < h->size && i < len; j++, i++) {
+                // 一旦有不匹配，则说明当前节点即为插入节点，停止查找，注意，这里的break只会退出当前循环
                 if (v[j] != s[i]) break;
             }
+            // j代表当前节点的匹配位置，如果上面的循环结束之后，如果j的值不等于当前节点的size，说明 有不匹配的字符（确实不匹配或者key已经提前匹配结束），停止查找
             if (j != h->size) break;
         } else {
+            // 非压缩节点结构: [header iscompr=0][abc][a-ptr][b-ptr][c-ptr](value-ptr?)
             /* Even when h->size is large, linear scan provides good
              * performances compared to other approaches that are in theory
-             * more sounding, like performing a binary search. */
+             * more sounding, like performing a binary search.
+             * 即使在h->size很大的情况下，与其他理论上听起来更响亮的方法(如执行二分搜索)相比，线性扫描也提供了良好的性能。
+             * */
             // 如果是非压缩节点，找到匹配的字符，沿着该字符的子节点往下查找
             for (j = 0; j < h->size; j++) {
                 if (v[j] == s[i]) break;
             }
+            // 如果j的值等于当前节点的size，说明在非压缩节点中，没有与当前key的当前位置匹配的路由键，停止查找
             if (j == h->size) break;
             i++;
         }
 
-        if (ts) raxStackPush(ts,h); /* Save stack of parent nodes. */
-        // 第一个子节点的指针。**children是一个二级指针，实际指向了第一个子节点的指针所在的位置。**children -> *children -> children
+        if (ts) raxStackPush(ts,h); /* Save stack of parent nodes. todo 后面再看*/
+        // 当前节点第一个子节点的指针。**children是一个二级指针，实际指向了第一个子节点的指针所在的位置。**children -> *FirstChild -> FirstChild
         raxNode **children = raxNodeFirstChildPtr(h);
         if (h->iscompr) j = 0; /* Compressed node only child is at index 0. */
         // **children 是一个二级指针，本身存储的地址值，这个地址值是第一个子节点的指针的地址（注意是指针的地址，而不是节点本身的地址）。
@@ -559,6 +582,7 @@ static inline size_t raxLowWalk(rax *rax, unsigned char *s, size_t len, raxNode 
  * otherwise the element is inserted and 1 is returned. On out of memory the
  * function returns 0 as well but sets errno to ENOMEM, otherwise errno will
  * be set to 0.
+ * 插入大小为len的元素s
  */
 int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old, int overwrite) {
     // s、len 插入键和插入键长度
@@ -574,7 +598,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
                         1、如果raxLowWalk()在压缩节点中停止，则索引'j'表示我们在压缩节点中停止的字符，即压缩节点被拆分的位置；
                         2、如果是非压缩节点，那么拆分位置的值总是为0；
                         3、拆分位置可以分为两种情况：
-                            3.1、冲突位置不等于0， 这是插入节点肯定是压缩节点
+                            3.1、冲突位置不等于0， 这个插入节点肯定是压缩节点
                             3.2、冲突位置等于0，此时插入节点即可以是压缩节点（这种情况即插入节点的第一个字符即为拆分位置），也可以是非压缩节点
                   */
     raxNode *h, **parentlink;
@@ -597,6 +621,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
     //                                                           |
     //                                                           |
     //                  子节点：                                 [header iscompr=0][abc][a-ptr][b-ptr][c-ptr](value-ptr?)
+
     // 返回值i表示的是要查找的字符的匹配位置，比如对于字符串friend来说，如果在rax树中发现只能匹配到e, 那么这里的i的值就是3
     debugf("### Insert %.*s with value %p\n", (int)len, s, data);
     i = raxLowWalk(rax,s,len,&h,&parentlink,&j,NULL);

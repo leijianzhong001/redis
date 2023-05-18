@@ -197,6 +197,7 @@ void dbAdd(redisDb *db, robj *key, robj *val) {
 
     serverAssertWithInfo(NULL,key,retval == DICT_OK);
     signalKeyAsReady(db, key, val->type);
+    // 保存到一个rax树中，rax树中key为slot+key, value为null
     if (server.cluster_enabled) slotToKeyAdd(key->ptr);
 }
 
@@ -1915,17 +1916,20 @@ int xreadGetKeys(struct redisCommand *cmd, robj **argv, int argc, getKeysResult 
 /* Slot to Key API. This is used by Redis Cluster in order to obtain in
  * a fast way a key that belongs to a specified hash slot. This is useful
  * while rehashing the cluster and in other conditions when we need to
- * understand if we have keys for a given hash slot. */
+ * understand if we have keys for a given hash slot.
+ * 槽到key API。Redis集群使用这个方法是为了快速获取属于指定哈希槽的键。这在重新散列集群时很有用，在需要了解给定散列槽是否有key的其他情况下也很有用。
+ * */
 void slotToKeyUpdateKey(sds key, int add) {
     size_t keylen = sdslen(key);
+    // 这应该是在计算当前key的slot值
     unsigned int hashslot = keyHashSlot(key,keylen);
     unsigned char buf[64];
     unsigned char *indexed = buf;
 
     server.cluster->slots_keys_count[hashslot] += add ? 1 : -1;
     if (keylen+2 > 64) indexed = zmalloc(keylen+2);
-    indexed[0] = (hashslot >> 8) & 0xff;
-    indexed[1] = hashslot & 0xff;
+    indexed[0] = (hashslot >> 8) & 0xff; // 取高8位
+    indexed[1] = hashslot & 0xff; // 取低8位
     memcpy(indexed+2,key,keylen);
     if (add) {
         raxInsert(server.cluster->slots_to_keys,indexed,keylen+2,NULL,NULL);

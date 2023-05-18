@@ -747,7 +747,10 @@ unsigned long getClusterConnectionsCount(void) {
  *
  * However if the key contains the {...} pattern, only the part between
  * { and } is hashed. This may be useful in the future to force certain
- * keys to be in the same node (assuming no resharding is in progress). */
+ * keys to be in the same node (assuming no resharding is in progress).
+ * 我们有16384个哈希槽。给定key的slot是作为该key的crc16中最低有效的14位获得的。
+ * 但是，如果键包含{…}模式中，只有{和}之间的部分被散列。这在将来强制某些键位于同一节点(假设没有进行重新分片)时可能很有用。
+ * */
 unsigned int keyHashSlot(char *key, int keylen) {
     int s, e; /* start-end indexes of { and } */
 

@@ -148,14 +148,17 @@ typedef struct rax {
 /* Stack data structure used by raxLowWalk() in order to, optionally, return
  * a list of parent nodes to the caller. The nodes do not have a "parent"
  * field for space concerns, so we use the auxiliary stack when needed.
+ *
  * raxLowWalk()使用的Stack数据结构，以便可选地向调用者返回父节点列表。节点没有“parent”字段来处理空间问题，因此我们在需要时使用辅助堆栈。
  * */
 #define RAX_STACK_STATIC_ITEMS 32
 typedef struct raxStack {
-    void **stack; /* Points to static_items or an heap allocated array. */
-    size_t items, maxitems; /* Number of items contained and total space. */
+    void **stack; /* Points to static_items or an heap allocated array. 实际存储数据的数组吗？ */
+    size_t items, maxitems; /* Number of items contained and total space. 元素数量和栈大小*/
     /* Up to RAXSTACK_STACK_ITEMS items we avoid to allocate on the heap
-     * and use this static array of pointers instead. */
+     * and use this static array of pointers instead.
+     * 直到RAXSTACK_STACK_ITEMS项，我们避免在堆上分配，而是使用这个静态指针数组。
+     * */
     void *static_items[RAX_STACK_STATIC_ITEMS];
     int oom; /* True if pushing into this stack failed for OOM at some point. */
 } raxStack;
