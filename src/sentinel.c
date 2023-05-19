@@ -4879,7 +4879,9 @@ void sentinelFailoverDetectEnd(sentinelRedisInstance *master) {
     }
     dictReleaseIterator(di);
 
-    /* Force end of failover on timeout. */
+    /* Force end of failover on timeout.
+     * 命令其余从节点复制新的主节点的执行时间超过了failover-timeout（不包含复制时间）， 则故障转移失败。注意即使超过了这个时间，Sentinel节点也会最终配置从节点去同步最新的主节点
+     * */
     if (elapsed > master->failover_timeout) {
         not_reconfigured = 0;
         timeout = 1;
@@ -4894,7 +4896,9 @@ void sentinelFailoverDetectEnd(sentinelRedisInstance *master) {
 
     /* If I'm the leader it is a good idea to send a best effort SLAVEOF
      * command to all the slaves still not reconfigured to replicate with
-     * the new master. */
+     * the new master.
+     * 如果我是leader，那么最好发送一个best effort SLAVEOF命令给所有仍然没有重新配置的slave，以便与新的master进行复制。
+     * */
     if (timeout) {
         dictIterator *di;
         dictEntry *de;

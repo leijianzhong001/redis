@@ -556,18 +556,41 @@ static inline size_t raxLowWalk(rax *rax, unsigned char *s, size_t len, raxNode 
 
         if (ts) raxStackPush(ts,h); /* Save stack of parent nodes. todo 后面再看*/
         // 当前节点第一个子节点的指针。**children是一个二级指针，实际指向了第一个子节点的指针所在的位置。**children -> *FirstChild -> FirstChild
+        /**
+         * +------------+-----+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+
+         * #    **children 是一个二级指针，本身存储的地址值，这个地址值是第一个子节点的指针的地址（注意是指针的地址，而不是节点本身的地址）。           #
+         * #                                **children                                                                                    #
+         * #                                     ↓                                                                                        #
+         * #                                     ↓                                                                                        #
+         * #   当前节点：[header iscompr=0][abc][a-ptr][b-ptr][c-ptr](value-ptr?)                                                          #
+         * +------------+-----+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+
+         */
         raxNode **children = raxNodeFirstChildPtr(h);
         if (h->iscompr) j = 0; /* Compressed node only child is at index 0. */
-        // **children 是一个二级指针，本身存储的地址值，这个地址值是第一个子节点的指针的地址（注意是指针的地址，而不是节点本身的地址）。
-        // children + j 就是把这个地址值+j, 最后这个地址值会变成匹配字符对应的节点的指针的地址（注意还是指针的地址）
-        // 最后将这个地址值复制给h变量， 即将下一个要遍历的子节点的指针地址赋给h, 其实就是跳转到子节点
-        memcpy(&h,children+j,sizeof(h));
-        // 记录父节点的位置
+
+        // children + j 就是把这个地址值+j, 最后这个地址值会变成匹配字符对应的节点的指针的地址（注意还是指针的地址）。以上面的图示为例,如果匹配位置j等于2， 那么children + j的结果就是c-ptr的地址
+        // 最后将这个地址值复制给h变量， 即将下一个要遍历的子节点的指针地址赋给h, 其实就是【跳转到子节点】
+        /**
+         * +------------+-----+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+
+         * #    **children 是一个二级指针，本身存储的地址值，这个地址值是第一个子节点的指针的地址（注意是指针的地址，而不是节点本身的地址）。                                      #
+         * #                                  [**children]   [**children + j]     <==修改children就是修改这里的 a-ptr 的值，也即是当前节点的第一个子节点的指针的地址         #
+         * #                                       ↓             ↓                                                                                                   #
+         * #                                       ↓             ↓                                                                                                   #
+         * #   当前节点h：[header iscompr=0][abc][a-ptr][b-ptr][c-ptr](value-ptr?)                                                                                    #
+         * #                                       ↓     ↓       ↓                                                                                                   #
+         * #                                      ...   ...      ↓                                                                                                   #
+         * #                                          子节点：[header iscompr=0][abc][a-ptr][b-ptr][c-ptr](value-ptr?)                                                #
+         * #                                                     ↑                                                                                                   #
+         * #                                                  memcpy后的h                                                                                             #
+         * +------------+-----+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+
+         */
+        memcpy(&h,children+j,sizeof(h)); // sizeof(h) 返回的是指针的长度，即8
+        // parentlink是一个二级指针，children+j是父节点指向当前节点的地址值，改变parentlink的值就是改变父节点指向当前节点的指针，即改变上面的c-prt的值
         parentlink = children+j;
         j = 0; /* If the new node is non compressed and we do not
                   iterate again (since i == len) set the split
                   position to 0 to signal this node represents
-                  the searched key. */
+                  the searched key. 如果新节点没有被压缩，并且我们没有再次迭代(因为i == len)，则将分割位置设置为0，以标志该节点表示搜索的key。*/
     }
     debugnode("Lookup stop node is",h);
     if (stopnode) *stopnode = h;
