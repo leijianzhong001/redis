@@ -748,6 +748,9 @@ sds sdscatfmt(sds s, char const *fmt, ...) {
  * After the call, the modified sds string is no longer valid and all the
  * references must be substituted with the new pointer returned by the call.
  *
+ * 从左到右删除字符串中由'cset'中发现的连续字符组成的部分，这是一个空终止的C字符串。
+ * 调用之后，修改后的sds字符串不再有效，所有引用必须用调用返回的新指针替换。
+ *
  * Example:
  *
  * s = sdsnew("AA...AA.a.aa.aHelloWorld     :::");
@@ -1009,6 +1012,14 @@ int hex_digit_to_int(char c) {
  * input string is empty, or NULL if the input contains unbalanced
  * quotes or closed quotes followed by non space characters
  * as in: "foo"bar or "foo'
+ *
+ *  sdssplitargs()函数是Redis中的一个字符串处理函数，主要用于将一个长字符串分割成多个子字符串，并返回一个动态数组（即Redis自己实现的sds类型）。
+ *  该函数接受两个参数：
+ *      line：需要被分割的原始字符串。
+ *      argc：一个指向整型变量的指针，保存了分割出来的字符串数量。
+ * 函数返回值为sds类型的动态数组，表示分割出来的多个子字符串。原始字符串中用[空格分隔]的每一段都会被分割成一个子字符串，并存储到动态数组中。同时，函数还会修改argc所指向的整型变量，用于记录分割出来的子字符串的数量。
+ * 通过调用sdssplitargs()函数，我们可以方便地将一个长字符串按照空格分割成多个子字符串，并得到每个子字符串的引用。
+ * 常见的应用场景包括解析命令行参数、解析配置文件等。需要注意的是，在使用该函数时应该确保输入的字符串符合预期格式，否则可能会导致解析错误或程序崩溃。
  */
 sds *sdssplitargs(const char *line, int *argc) {
     const char *p = line;

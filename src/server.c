@@ -3385,6 +3385,8 @@ void initServer(void) {
  * are loaded).
  * Specifically, creation of threads due to a race bug in ld.so, in which
  * Thread Local Storage initialization collides with dlopen call.
+ * 服务器初始化的一些步骤需要在最后完成(在modules加载之后)。
+ * 具体来说，由于ld.so中的竞争错误而创建的线程，其中线程本地存储初始化与dloopen调用发生冲突
  * see: https://sourceware.org/bugzilla/show_bug.cgi?id=19329 */
 void InitServerLast() {
     bioInit();
@@ -6134,7 +6136,20 @@ void redisSetCpuAffinity(const char *cpulist) {
 }
 
 /* Send a notify message to systemd. Returns sd_notify return code which is
- * a positive number on success. */
+ * a positive number on success.
+ * 发送通知消息给systemd。在成功时返回sd_notify返回码，这是一个正数。
+ *
+ * 在Linux中，systemd是一个常用的系统和服务管理器，它是现代Linux发行版中的默认初始化系统。通过systemd，我们可以方便地启动、停止、重启或管理系统中的各种服务。
+ * 在使用systemd管理服务时，有时候我们需要向systemd发送通知消息，以便让systemd了解服务的状态变化或执行进度。通知消息可以帮助systemd更好地监控和管理服务的运行状态，从而提高系统的可靠性和稳定性。
+ * 具体来说，通过给systemd发送通知消息，我们可以：
+ *      - 向systemd报告服务的就绪状态。
+ *      - 向systemd报告服务的运行状态、健康状况等信息。
+ *      - 与systemd进行进程间通信（IPC），以便传递自定义的命令或参数等信息。
+ * 为了向systemd发送通知消息，我们可以使用systemd-notify命令。systemd-notify命令可以向systemd发送指定的通知消息，并根据返回值判断是否发送成功。
+ * 例如，以下命令可以向systemd发送一个READY类型的通知消息，表示服务已经准备就绪：
+ *     $ systemd-notify --ready
+ * 另外，我们还可以使用一些特殊的环境变量（如LISTEN_FDS、LISTEN_PID等）来与systemd进行进程间通信。这些环境变量由systemd在启动服务时自动设置，并可以通过getenv()函数获取。
+ * */
 int redisCommunicateSystemd(const char *sd_notify_msg) {
 #ifdef HAVE_LIBSYSTEMD
     int ret = sd_notify(0, sd_notify_msg);
@@ -6339,7 +6354,9 @@ int main(int argc, char **argv) {
      * data structures with master nodes to monitor. */
     // 【4】 如果以sentinel模式启动，初始化sentinel相关机制
     if (server.sentinel_mode) {
+        // 初始化Sentinel的配置,具体来说就是将端口号设置为26379, 并关闭保护模式
         initSentinelConfig();
+        // 初始化sentinel
         initSentinel();
     }
 
@@ -6380,7 +6397,7 @@ int main(int argc, char **argv) {
          * */
         if (argv[1][0] != '-') {
             /* Replace the config file in server.exec_argv with its absolute path. */
-            // 【7】 如果启动命令的第二个参数不是以"-"开始的,则是配置文件参数，将配置文件路径幻化为绝对路径，存入server.configfile
+            // 【7】 如果启动命令的第二个参数不是以"-"开始的,则是配置文件参数，将配置文件路径转化为绝对路径，存入server.configfile
             server.configfile = getAbsolutePath(argv[1]);
             zfree(server.exec_argv[1]);
             server.exec_argv[1] = zstrdup(server.configfile);
@@ -6411,8 +6428,12 @@ int main(int argc, char **argv) {
             j++;
         }
 
-        // 从配置文件中加载所有配置项，并使用启动命令配置项覆盖配置文件中的配置项
+        // 从配置文件中加载所有配置项，并使用启动命令配置项[覆盖]配置文件中的配置项. 无论是redis还是sentinel都会走这个流程
         loadServerConfig(server.configfile, config_from_stdin, options);
+        // 如果是sentinel模式，则从队列中加载配置项, 因为sentinel的配置项之间可能存在依赖关系,所以要以一定的顺序被加载,因此需要从队列中取
+        //      1. 加载需要在sentinel monitor之前应用的配置项
+        //      2. 加载sentinel monitor相关的配置项
+        //      3. 加载需要在sentinel monitor之后应用的配置项
         if (server.sentinel_mode) loadSentinelConfigFromQueue();
         sdsfree(options);
     }
@@ -6506,6 +6527,7 @@ int main(int argc, char **argv) {
         InitServerLast();
         sentinelIsRunning();
         if (server.supervised_mode == SUPERVISED_SYSTEMD) {
+            // 如果是以systemd的方式启动,发送服务就绪消息
             redisCommunicateSystemd("STATUS=Ready to accept connections\n");
             redisCommunicateSystemd("READY=1\n");
         }

@@ -230,7 +230,10 @@ typedef struct typeInterface {
     /* Called on server start, to init the server with default value */
     void (*init)(typeData data);
     /* Called on server startup and CONFIG SET, returns 1 on success, 0 on error
-     * and can set a verbose err string, update is true when called from CONFIG SET */
+     * and can set a verbose err string, update is true when called from CONFIG SET
+     * 在服务器启动和执行CONFIG SET命令时被调用，成功时返回1，错误时返回0，并且可以设置一个详细的err字符串，CONFIG SET调用时update为true
+     * 这里的这个set函数的具体实现是在createBoolConfig这个宏中指定的, 具体的实现为 config.c#boolConfigSet
+     * */
     int (*set)(typeData data, sds value, int update, const char **err);
     /* Called on CONFIG GET, required to add output to the client */
     void (*get)(client *c, typeData data);
@@ -394,6 +397,7 @@ void loadServerConfigFromString(char *config) {
     sds *lines;
     int save_loaded = 0;
 
+    // 将读到的配置文件按行分隔
     lines = sdssplitlen(config,strlen(config),"\n",1,&totlines);
 
     for (i = 0; i < totlines; i++) {
@@ -401,12 +405,13 @@ void loadServerConfigFromString(char *config) {
         int argc;
 
         linenum = i+1;
+        // 去掉字符串中的制表符、回车符、换行符
         lines[i] = sdstrim(lines[i]," \t\r\n");
 
-        /* Skip comments and blank lines */
+        /* Skip comments and blank lines 跳过注释相关的行*/
         if (lines[i][0] == '#' || lines[i][0] == '\0') continue;
 
-        /* Split into arguments */
+        /* Split into arguments 使用空格分割字符串为一个sds数组*/
         argv = sdssplitargs(lines[i],&argc);
         if (argv == NULL) {
             err = "Unbalanced quotes in configuration line";
@@ -420,9 +425,12 @@ void loadServerConfigFromString(char *config) {
         }
         sdstolower(argv[0]);
 
-        /* Iterate the configs that are standard */
+        /* Iterate the configs that are standard
+         *  【1】 这里使用configs数组中的相关标准配置项函数配置server对象
+         * */
         int match = 0;
         for (standardConfig *config = configs; config->name != NULL; config++) {
+            // strcasecmp函数比较两个字符串是否相等,忽略大小写,相等返回0,不相等返回非0
             if ((!strcasecmp(argv[0],config->name) ||
                 (config->alias && !strcasecmp(argv[0],config->alias))))
             {
@@ -430,6 +438,7 @@ void loadServerConfigFromString(char *config) {
                     err = "wrong number of arguments";
                     goto loaderr;
                 }
+                // 【2】 使用配置文件中读取到的值配置server对象,server对象的属性指针被包含在config.data.yesno.config属性中
                 if (!config->interface.set(config->data, argv[1], 0, &err)) {
                     goto loaderr;
                 }
@@ -470,6 +479,7 @@ void loadServerConfigFromString(char *config) {
              */
             if (!save_loaded) {
                 save_loaded = 1;
+                // 重置server.saveparams属性,这个属性存放了配置文件中的save配置项的值
                 resetServerSaveParams();
             }
 
@@ -599,12 +609,15 @@ void loadServerConfigFromString(char *config) {
             queueLoadModule(argv[1],&argv[2],argc-2);
         } else if (!strcasecmp(argv[0],"sentinel")) {
             /* argc == 1 is handled by main() as we need to enter the sentinel
-             * mode ASAP. */
+             * mode ASAP.
+             * argc == 1由main()处理，因为我们需要尽快进入哨兵模式。 */
             if (argc != 1) {
                 if (!server.sentinel_mode) {
                     err = "sentinel directive while not in sentinel mode";
                     goto loaderr;
                 }
+                // 这里+1是为了去掉sentinel相关的配置前面的sentinel关键字, 例如:
+                // sentinel myid 79f88047bfdef7a6323c7f64638063cf731e05f1
                 queueSentinelConfig(argv+1,argc-1,linenum,lines[i]);
             }
         } else {
@@ -1756,6 +1769,7 @@ static void boolConfigInit(typeData data) {
     *data.yesno.config = data.yesno.default_value;
 }
 
+// 设置boolean类型的值到config.data中, 指定的值为value,如果是由config set命令触发,则update为1
 static int boolConfigSet(typeData data, sds value, int update, const char **err) {
     int yn = yesnotoi(value);
     if (yn == -1) {
@@ -1764,6 +1778,7 @@ static int boolConfigSet(typeData data, sds value, int update, const char **err)
     }
     if (data.yesno.is_valid_fn && !data.yesno.is_valid_fn(yn, err))
         return 0;
+    // 注意, 这里的这个config就是server对象中的配置项指针, 例如server.hz, server.port等
     int prev = *(data.yesno.config);
     *(data.yesno.config) = yn;
     if (update && data.yesno.update_fn && !data.yesno.update_fn(yn, prev, err)) {
@@ -1781,6 +1796,7 @@ static void boolConfigRewrite(typeData data, const char *name, struct rewriteCon
     rewriteConfigYesNoOption(state, name,*(data.yesno.config), data.yesno.default_value);
 }
 
+// "rdbchecksum", NULL, IMMUTABLE_CONFIG, server.rdb_checksum, 1, NULL, NULL
 #define createBoolConfig(name, alias, flags, config_addr, default, is_valid, update) { \
     embedCommonConfig(name, alias, flags) \
     embedConfigInterface(boolConfigInit, boolConfigSet, boolConfigGet, boolConfigRewrite) \
@@ -2395,8 +2411,10 @@ static int updateTLSPort(long long val, long long prev, const char **err) {
 
 #endif  /* USE_OPENSSL */
 
+// configs数组定义了绝大部分配置选项与server属性的对应关系
 standardConfig configs[] = {
     /* Bool configs */
+    // createBoolConfig这个宏会使用这里指定的参数构建一个booll类型的standardConfig对象
     createBoolConfig("rdbchecksum", NULL, IMMUTABLE_CONFIG, server.rdb_checksum, 1, NULL, NULL),
     createBoolConfig("daemonize", NULL, IMMUTABLE_CONFIG, server.daemonize, 0, NULL, NULL),
     createBoolConfig("io-threads-do-reads", NULL, IMMUTABLE_CONFIG, server.io_threads_do_reads, 0,NULL, NULL), /* Read + parse from threads? */

@@ -962,10 +962,10 @@ struct moduleLoadQueueEntry {
 };
 
 struct sentinelLoadQueueEntry {
-    int argc;
-    sds *argv;
-    int linenum;
-    sds line;
+    int argc; // 配置参数数量
+    sds *argv; // 配置参数列表
+    int linenum; // 配置文件行号
+    sds line; // 配置文件行内容
 };
 
 struct sentinelConfig {
