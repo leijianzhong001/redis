@@ -1996,7 +1996,7 @@ const char *sentinelHandleConfiguration(char **argv, int argc) {
         int quorum = atoi(argv[4]);
 
         if (quorum <= 0) return "Quorum must be 1 or greater.";
-        // 对于sentinel monitor配置项而言,其格式如下:
+        // 对于sentinel monitor配置项而言,其格式如下:       <-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=--=-=--=-=--=-=-[1]
         //      sentinel monitor FGSMP_1 10.243.81.205 6379 2
         // 注意,这里的argv[1]指向的是 FGSMP_1 这个master节点名称, 因为在前面 loadServerConfig 函数中, 给Sentinel_config的相关属性中放入的配置内容是没有sentinel关键字的
         if (createSentinelRedisInstance(argv[1],SRI_MASTER,argv[2],
@@ -2076,9 +2076,12 @@ const char *sentinelHandleConfiguration(char **argv, int argc) {
     } else if ((!strcasecmp(argv[0],"known-slave") ||
                 !strcasecmp(argv[0],"known-replica")) && argc == 4)
     {
+        // 加载sentinel known-slave相关的配置,即读取known-slave后面的从节点信息,然后创建对应的sentinelRedisInstance  <-=-=-=-=-=-=-=-=-[3]
         sentinelRedisInstance *slave;
 
-        /* known-replica <name> <ip> <port> */
+        /* known-replica <name> <ip> <port>
+         *      eg: sentinel known-slave CDPOS_1 10.237.181.69 6379
+         * */
         ri = sentinelGetMasterByName(argv[1]);
         if (!ri) return "No such master with specified name.";
         if ((slave = createSentinelRedisInstance(NULL,SRI_SLAVE,argv[2],
@@ -2088,10 +2091,13 @@ const char *sentinelHandleConfiguration(char **argv, int argc) {
         }
     } else if (!strcasecmp(argv[0],"known-sentinel") &&
                (argc == 4 || argc == 5)) {
+        // 加载sentinel known-sentinel相关的配置,即读取known-slave后面的从节点信息,然后创建对应的sentinelRedisInstance  <-=-=-=-=-=-=-=-=-[3]
         sentinelRedisInstance *si;
 
         if (argc == 5) { /* Ignore the old form without runid. */
-            /* known-sentinel <name> <ip> <port> [runid] */
+            /* known-sentinel <name> <ip> <port> [runid]
+             * eg: sentinel known-sentinel SCUS_c15675_2 10.237.188.71 26379 36c91acb157a7cb11562859117145aa523ed04e5
+             * */
             ri = sentinelGetMasterByName(argv[1]);
             if (!ri) return "No such master with specified name.";
             if ((si = createSentinelRedisInstance(argv[4],SRI_SENTINEL,argv[2],
@@ -2650,11 +2656,11 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
 
     /* The following fields must be reset to a given value in the case they
      * are not found at all in the INFO output.
-     * 如果在INFO输出中根本找不到以下字段，则必须将其重置为给定值。
+     * 如果在INFO输出中根本找不到以下字段，则必须将其重置为给定值。                                                            <-[1]
      * */
     ri->master_link_down_time = 0;
 
-    /* Process line by line. */
+    /* Process line by line. 还是按行分割*/
     lines = sdssplitlen(info,strlen(info),"\r\n",2,&numlines);
     for (j = 0; j < numlines; j++) {
         sentinelRedisInstance *slave;
@@ -2674,7 +2680,10 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
         }
 
         /* old versions: slave0:<ip>,<port>,<state>
-         * new versions: slave0:ip=127.0.0.1,port=9999,... */
+         * new versions: slave0:ip=127.0.0.1,port=9999,...
+         *
+         * slave0:ip=10.237.181.69,port=6379,state=online,offset=5906659286,lag=0
+         * */
         if ((ri->flags & SRI_MASTER) &&
             sdslen(l) >= 7 &&
             !memcmp(l,"slave",5) && isdigit(l[5]))
@@ -2703,7 +2712,8 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
 
             /* Check if we already have this slave into our table,
              * otherwise add it.
-             * 检查我们的表中是否已经有这个从服务器，否则添加它。
+             * 检查当前主节点的slaves字典里是否有该slave,如果没有,则创建一个对应的SentinelRedisInstance实例,并添加到slave字典中. <-[2]
+             * 再此之前, 可能slave已经在前面通过sentinel.conf读入了, 这里就不再创建.
              * */
             if (sentinelRedisInstanceLookupSlave(ri,ip,atoi(port)) == NULL) {
                 if ((slave = createSentinelRedisInstance(NULL,SRI_SLAVE,ip,
@@ -2727,7 +2737,24 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
         else if (sdslen(l) >= 10 && !memcmp(l,"role:slave",10)) role = SRI_SLAVE;
 
         if (role == SRI_SLAVE) {
-            /* master_host:<host> */
+            /* master_host:<host>
+             * # Replication
+             * role:slave
+             * master_host:10.237.181.23
+             * master_port:6379
+             * master_link_status:up
+             * master_last_io_seconds_ago:1
+             * master_sync_in_progress:0
+             * slave_repl_offset:5906692510
+             * slave_priority:100
+             * slave_read_only:1
+             * connected_slaves:0
+             * master_repl_offset:0
+             * repl_backlog_active:0
+             * repl_backlog_size:1048576
+             * repl_backlog_first_byte_offset:0
+             * repl_backlog_histlen:0
+             * */
             if (sdslen(l) >= 12 && !memcmp(l,"master_host:",12)) {
                 if (ri->slave_master_host == NULL ||
                     strcasecmp(l+12,ri->slave_master_host))
@@ -3307,7 +3334,8 @@ void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
     }
 
     /* PUBLISH hello messages to all the three kinds of instances. */
-    // 【3】 对所有主从节点节点发送hello消息， hello消息的发送间隔2s
+    // 【3】 对所有类型的节点发送hello消息， hello消息的发送间隔2s
+    // 由于sentinel只订阅了主节点的__sentinel__:hello频道，所以其他sentinel并不会处理当前sentinel发送的hello消息
     if ((now - ri->last_pub_time) > SENTINEL_PUBLISH_PERIOD) {
         sentinelSendHello(ri);
     }
