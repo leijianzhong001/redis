@@ -216,7 +216,7 @@ typedef struct sentinelRedisInstance {
                                              SENTINEL is-master-down command. */
     mstime_t s_down_since_time; /* Subjectively down since time. */
     mstime_t o_down_since_time; /* Objectively down since time. */
-    mstime_t down_after_period; /* Consider it down after that period.         存储sentinel down-after-milliseconds配置，用于判定节点是否已经主管下线*/
+    mstime_t down_after_period; /* Consider it down after that period.         存储sentinel down-after-milliseconds 配置，用于判定节点是否已经主观下线*/
     mstime_t info_refresh;  /* Time at which we received INFO output from it. */
     dict *renamed_commands;     /* Commands renamed in this instance:
                                    Sentinel will use the alternative commands
@@ -2504,18 +2504,25 @@ static int instanceLinkNegotiateTLS(redisAsyncContext *context) {
 
 /* Create the async connections for the instance link if the link
  * is disconnected. Note that link->disconnected is true even if just
- * one of the two links (commands and pub/sub) is missing. */
+ * one of the two links (commands and pub/sub) is missing.
+ *
+ *  当链路断开时，为实例链路创建异步连接。注意，即使两个链接(commands和pubsub)中只有一个丢失，link->disconnected也为true。
+ * */
 void sentinelReconnectInstance(sentinelRedisInstance *ri) {
 
+    // 如果指定节点和当前sentinel的连接在，那么直接返回
     if (ri->link->disconnected == 0) return;
     if (ri->addr->port == 0) return; /* port == 0 means invalid address. */
     instanceLink *link = ri->link;
     mstime_t now = mstime();
 
+    // 如果没到下一次ping时间，也不建立连接，直接返回
+    // 每隔1秒， Sentinel节点会向主节点、从节点、其余Sentinel节点 发送一条ping命令做一次心跳检测，来确认这些节点当前是否可达
     if (now - ri->link->last_reconn_time < SENTINEL_PING_PERIOD) return;
     ri->link->last_reconn_time = now;
 
     /* Commands connection. */
+    // 【1】 创建命令连接
     if (link->cc == NULL) {
 
         /* It might be that the instance is disconnected because it wasn't available earlier when the instance
@@ -2530,6 +2537,17 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
             }
         }
 
+        /*
+         * redisAsyncConnectBind，redisAsyncCommand 等函数来自于hiredis库。 它是redis提供的一个轻量级的c语言客户端库，
+         * 这两个函数负责建立异步连接并发送异步请求
+         *
+         * 说明一下 redisAsyncCommand 函数，它的函数原型为：
+         *      int redisAsyncCommand(redisAsyncContext *ac, redisCallbackFn *fn, void *privdata, const char *format, ...)
+         * 参数说明：
+         *      ac: 连接上下文；
+         *      fn: 回调函数；
+         *      privdata: 用户回调函数的附加参数；
+         */
         link->cc = redisAsyncConnectBind(ri->addr->ip,ri->addr->port,NET_FIRST_BIND_ADDR);
 
         if (link->cc && !link->cc->err) anetCloexec(link->cc->c.fd);
@@ -2559,7 +2577,9 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
             sentinelSendPing(ri);
         }
     }
+
     /* Pub / Sub */
+    // 【2】 如果待连接的节点是主从节点，则创建订阅连接
     if ((ri->flags & (SRI_MASTER|SRI_SLAVE)) && link->pc == NULL) {
         link->pc = redisAsyncConnectBind(ri->addr->ip,ri->addr->port,NET_FIRST_BIND_ADDR);
         if (link->pc && !link->pc->err) anetCloexec(link->pc->c.fd);
@@ -2584,6 +2604,7 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
             sentinelSendAuthIfNeeded(ri,link->pc);
             sentinelSetClientName(ri,link->pc,"pubsub");
             /* Now we subscribe to the Sentinels "Hello" channel. */
+            // 【3】 为订阅连接注册回调函数 sentinelReceiveHelloMessages ，负责处理sentinel频道收到的数据
             retval = redisAsyncCommand(link->pc,
                 sentinelReceiveHelloMessages, ri, "%s %s",
                 sentinelInstanceMapCommand(ri,"SUBSCRIBE"),
@@ -2628,7 +2649,9 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
     ri->info = sdsnew(info);
 
     /* The following fields must be reset to a given value in the case they
-     * are not found at all in the INFO output. */
+     * are not found at all in the INFO output.
+     * 如果在INFO输出中根本找不到以下字段，则必须将其重置为给定值。
+     * */
     ri->master_link_down_time = 0;
 
     /* Process line by line. */
@@ -2679,7 +2702,9 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
             }
 
             /* Check if we already have this slave into our table,
-             * otherwise add it. */
+             * otherwise add it.
+             * 检查我们的表中是否已经有这个从服务器，否则添加它。
+             * */
             if (sentinelRedisInstanceLookupSlave(ri,ip,atoi(port)) == NULL) {
                 if ((slave = createSentinelRedisInstance(NULL,SRI_SLAVE,ip,
                             atoi(port), ri->quorum, ri)) != NULL)
@@ -3195,14 +3220,20 @@ int sentinelSendPing(sentinelRedisInstance *ri) {
 }
 
 /* Send periodic PING, INFO, and PUBLISH to the Hello channel to
- * the specified master or slave instance. */
+ * the specified master or slave instance.
+ * 定期向指定的主实例或从实例发送PING、INFO和PUBLISH到Hello通道。
+ * */
 void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
     mstime_t now = mstime();
     mstime_t info_period, ping_period;
     int retval;
 
     /* Return ASAP if we have already a PING or INFO already pending, or
-     * in the case the instance is not properly connected. */
+     * in the case the instance is not properly connected.
+     * 如果我们已经有一个PING或INFO已经挂起，或者在实例没有正确连接的情况下，请尽快返回
+     * 如果在前面的 sentinelReconnectInstance 确实建立了连接，因为是异步的，到这个地方可能确实并未成功连接。
+     * 此时直接返回，防止阻塞serverCron函数
+     * */
     if (ri->link->disconnected) return;
 
     /* For INFO, PING, PUBLISH that are not critical commands to send we
@@ -3210,7 +3241,12 @@ void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
      * want to use a lot of memory just because a link is not working
      * properly (note that anyway there is a redundant protection about this,
      * that is, the link will be disconnected and reconnected if a long
-     * timeout condition is detected. */
+     * timeout condition is detected.
+     *
+     * 对于INFO, PING, PUBLISH这些不重要的命令，我们也有一个SENTINEL_MAX_PENDING_COMMANDS的限制。
+     * 我们不希望仅仅因为链接不能正常工作就使用大量内存(请注意，无论如何都有冗余保护，即如果检测到长超时条件，链接将被断开并重新连接)。
+     * 等待的命令大于 100，就不再发送命令
+     * */
     if (ri->link->pending_commands >=
         SENTINEL_MAX_PENDING_COMMANDS * ri->link->refcount) return;
 
@@ -3221,11 +3257,17 @@ void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
      *
      * Similarly we monitor the INFO output more often if the slave reports
      * to be disconnected from the master, so that we can have a fresh
-     * disconnection time figure. */
+     * disconnection time figure.
+     *
+     * 如果这是处于O_DOWN状态的主服务器的从服务器，我们开始每秒向它发送INFO，而不是通常的SENTINEL_INFO_PERIOD周期。
+     * 因为在这种状态下，我们要密切监视从服务器，以防它们被另一个哨兵或系统管理员变成主服务器。
+     * 类似地，如果从属服务器报告与主服务器断开连接，我们将更频繁地监视INFO输出，这样我们就可以获得一个新的断开连接时间数字。
+     * */
     if ((ri->flags & SRI_SLAVE) &&
         ((ri->master->flags & (SRI_O_DOWN|SRI_FAILOVER_IN_PROGRESS)) ||
          (ri->master_link_down_time != 0)))
     {
+        // INFO消息频率，在从节点的异常状态下，频率会提高到1s一次
         info_period = 1000;
     } else {
         info_period = SENTINEL_INFO_PERIOD;
@@ -3233,15 +3275,24 @@ void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
 
     /* We ping instances every time the last received pong is older than
      * the configured 'down-after-milliseconds' time, but every second
-     * anyway if 'down-after-milliseconds' is greater than 1 second. */
+     * anyway if 'down-after-milliseconds' is greater than 1 second.
+     *
+     * 如果“down-after-milliseconds”小于1s, 则按照 down-after-milliseconds 的值作为频率发送ping命令。
+     * 但如果“down-after-milliseconds”大于1秒，则按照1s一次的频率发送ping命令
+     * */
     ping_period = ri->down_after_period;
     if (ping_period > SENTINEL_PING_PERIOD) ping_period = SENTINEL_PING_PERIOD;
 
     /* Send INFO to masters and slaves, not sentinels. */
+    // 【1】 给所有的主从节点发送INFO命令 ，并注册 sentinelInfoReplyCallback 为回调函数。
+    // INFO命令的发送间隔默认为10s。如果接受命令的节点为从节点，并且处于下线或者故障转移状态，则提高发送频率为is
+    // INFO的响应中包含主从节点地址，是否在线，主从同步状态，复制偏移量等信息。Sentinel节点会从INFO响应中获取最新的主从节点信息
     if ((ri->flags & SRI_SENTINEL) == 0 &&
         (ri->info_refresh == 0 ||
         (now - ri->info_refresh) > info_period))
     {
+        // sentinelInfoReplyCallback 函数回调用 sentinelRefreshInstanceInfo 函数解析INFO响应数据，该函数如果发现了INFO响应中返回了
+        // 不存在于slave字典中的从节点实例，则调用 createSentinelRedisInstance 函数创建一个新的从节点实例，并放入主节点的slaves字典中
         retval = redisAsyncCommand(ri->link->cc,
             sentinelInfoReplyCallback, ri, "%s",
             sentinelInstanceMapCommand(ri,"INFO"));
@@ -3249,12 +3300,14 @@ void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
     }
 
     /* Send PING to all the three kinds of instances. */
+    // 【2】 对所有节点发送ping命令， sentinel通过发送ping命令来检测其他节点的状态， ping命令的发送间隔默认为1s
     if ((now - ri->link->last_pong_time) > ping_period &&
                (now - ri->link->last_ping_time) > ping_period/2) {
         sentinelSendPing(ri);
     }
 
     /* PUBLISH hello messages to all the three kinds of instances. */
+    // 【3】 对所有主从节点节点发送hello消息， hello消息的发送间隔2s
     if ((now - ri->last_pub_time) > SENTINEL_PUBLISH_PERIOD) {
         sentinelSendHello(ri);
     }
@@ -5118,13 +5171,20 @@ void sentinelAbortFailover(sentinelRedisInstance *ri) {
 /* ======================== SENTINEL timer handler ==========================
  * This is the "main" our Sentinel, being sentinel completely non blocking
  * in design. The function is called every second.
+ * 这是我们的哨兵的main函数，哨兵在设计上完全不阻塞。这个函数每秒被调用一次。
  * -------------------------------------------------------------------------- */
 
 /* Perform scheduled operations for the specified Redis instance. */
 void sentinelHandleRedisInstance(sentinelRedisInstance *ri) {
+    // 这里的ri可能是master, slave, sentinel
     /* ========== MONITORING HALF ============ */
     /* Every kind of instance */
+    // 【1】 sentinelReconnectInstance 函数负责建立网络连接
     sentinelReconnectInstance(ri);
+    // sentinelSendPeriodicCommands 函数负责发送定时消息给redis的主从节点和其他sentinel节点
+    // 1OS一次INFO
+    // 2s一次PUBLISH __sentinel__:hello
+    // 1s一次PING
     sentinelSendPeriodicCommands(ri);
 
     /* ============== ACTING HALF ============= */
@@ -5138,6 +5198,7 @@ void sentinelHandleRedisInstance(sentinelRedisInstance *ri) {
     }
 
     /* Every kind of instance */
+    // 【2】 检查是否存在主观下线的节点
     sentinelCheckSubjectivelyDown(ri);
 
     /* Masters and slaves */
@@ -5145,25 +5206,36 @@ void sentinelHandleRedisInstance(sentinelRedisInstance *ri) {
         /* Nothing so far. */
     }
 
-    /* Only masters */
+    /* Only masters  3~6步只对主节点执行， 这是负责实现故障转移*/
     if (ri->flags & SRI_MASTER) {
+        // 【3】 检查是否存在客观下线的节点
         sentinelCheckObjectivelyDown(ri);
+        // 【4】 sentinelStartFailoverIfNeeded 用于判断是否可以进行故障转移，
         if (sentinelStartFailoverIfNeeded(ri))
+            // 如果返回是，则调用 sentinelAskMasterStateToOtherSentinels 函数发送投票请求。
+            // 这个函数被调用了两次，本次调用只有在故障转移开始后才会进行。发送投票请求， 要求其他sentinel节点投票给当前节点
+            // sentinel is-master-down-by-addr 127.0.0.1 6379 0 *
             sentinelAskMasterStateToOtherSentinels(ri,SENTINEL_ASK_FORCED);
+        // 【5】 sentinelFailoverStateMachine 函数实现了一个故障转移状态机，实现故障转移逻辑
         sentinelFailoverStateMachine(ri);
+        // 【6】调用 sentinelAskMasterStateToOtherSentinels 函数询问其他sentinel节点对该主节点的主观下线的判定结果
+        // 这个函数被调用了两次，本次调用会在每次定时调用时触发，负责询问其他sentinel节点对指定主节点的主观下线意见
+        // sentinel is-master-down-by-addr 127.0.0.1 6379 0 691b795360f0a5957ffa3537bc27d2327ed87e49
         sentinelAskMasterStateToOtherSentinels(ri,SENTINEL_NO_FLAGS);
     }
 }
 
 /* Perform scheduled operations for all the instances in the dictionary.
- * Recursively call the function against dictionaries of slaves. */
+ * Recursively call the function against dictionaries of slaves.
+ * 对字典中的所有实例执行计划操作。针对从服务器的字典递归调用该函数。
+ * */
 void sentinelHandleDictOfRedisInstances(dict *instances) {
     // instances 节点字典, 可以是sentinel.master字典, 或者某个sentinelRedisInstance实例的slave字典, sentinel节点字典
     dictIterator *di;
     dictEntry *de;
     sentinelRedisInstance *switch_to_promoted = NULL;
 
-    /* There are a number of things we need to perform against every master. */
+    /* There are a number of things we need to perform agai nst every master. */
     di = dictGetIterator(instances);
     while((de = dictNext(di)) != NULL) {
         sentinelRedisInstance *ri = dictGetVal(de);
