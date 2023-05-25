@@ -289,7 +289,9 @@ struct sentinelState {
                            not NULL. */
     int announce_port;  /* Port that is gossiped to other sentinels if
                            non zero. */
-    unsigned long simfailure_flags; /* Failures simulation. */
+    unsigned long simfailure_flags; /* Failures simulation. SENTINEL SIMULATE-FAILURE 命令是 Redis Sentinel（哨兵）提供的一种用于模拟故障的命令。它可以用来测试和验证Redis Sentinel在发现主节点或从节点故障时的行为和处理机制。
+                                                            具体来说，当我们执行 SENTINEL SIMULATE-FAILURE <master-name> 命令时，Redis Sentinel会将名为 <master-name> 的主节点标记为 DOWN 状态，这样就会触发自动故障转移流程，Redis Sentinel 将尝试选举一个新的主节点，并将其他从节点切换到新的主节点上工作。
+                                                            需要注意的是，SENTINEL SIMULATE-FAILURE 命令并不会真正地使主节点或从节点进入故障状态，而只是模拟了一个故障事件。这个命令的主要作用是帮助我们测试和验证Redis Sentinel在实际场景中的表现，以便更好地了解其工作原理和特性。*/
     int deny_scripts_reconfig; /* Allow SENTINEL SET ... to change script
                                   paths at runtime? */
     char *sentinel_auth_pass;    /* Password to use for AUTH against other sentinel */
@@ -4497,7 +4499,7 @@ void sentinelCheckObjectivelyDown(sentinelRedisInstance *master) {
 /* Receive the SENTINEL is-master-down-by-addr reply, see the
  * sentinelAskMasterStateToOtherSentinels() function for more information. */
 void sentinelReceiveIsMasterDownReply(redisAsyncContext *c, void *reply, void *privdata) {
-    // sentinelAskMasterStateToOtherSentinels函数中给redisAsyncCommand回调函数设置的附加参数, 即sentinel is-master-down-by-addr命令的接收节点sentinel实例
+    // privdata是sentinelAskMasterStateToOtherSentinels函数中给redisAsyncCommand回调函数设置的附加参数, 即sentinel is-master-down-by-addr命令的接收节点sentinel实例
     sentinelRedisInstance *ri = privdata;
     instanceLink *link = c->data;
     redisReply *r;
@@ -4700,8 +4702,12 @@ int sentinelLeaderIncr(dict *counters, char *runid) {
  *
  * To be a leader for a given epoch, we should have the majority of
  * the Sentinels we know (ever seen since the last SENTINEL RESET) that
- * reported the same instance as leader for the same epoch. */
+ * reported the same instance as leader for the same epoch.
+ * 扫描所有连接到这个master的哨兵, 检查指定的纪元是否存在一个leader.
+ * 要成为给定纪元的领导者，我们应该让我们知道的大多数哨兵(自上次哨兵重置以来)报告相同纪元的相同sentinel实例作为领导者。
+ * */
 char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
+    // epoch: 本次故障转移的配置纪元, 这个值主要用来辅助统计投票结果，因为只有在 failover_epoch 所属的纪元内，其投票才是有效的
     dict *counters;
     dictIterator *di;
     dictEntry *de;
@@ -4714,9 +4720,12 @@ char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
     serverAssert(master->flags & (SRI_O_DOWN|SRI_FAILOVER_IN_PROGRESS));
     counters = dictCreate(&leaderVotesDictType,NULL);
 
+    // 总票数，包括自己在内
     voters = dictSize(master->sentinels)+1; /* All the other sentinels and me.*/
 
     /* Count other sentinels votes */
+    // 每一个sentinel实例的leader、leader_epoch属性都存放了获得该sentinel节点最新投票的节点的myidh和纪元，使用counters字典统计每个Sentinel <-[1]
+    // 节点当前纪元获得票数， 并将counters字典获得最多票数的节点存放到winner变量中。
     di = dictGetIterator(master->sentinels);
     while((de = dictNext(di)) != NULL) {
         sentinelRedisInstance *ri = dictGetVal(de);
@@ -4727,7 +4736,11 @@ char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
 
     /* Check what's the winner. For the winner to win, it needs two conditions:
      * 1) Absolute majority between voters (50% + 1).
-     * 2) And anyway at least master->quorum votes. */
+     * 2) And anyway at least master->quorum votes.
+     * 看看谁是赢家。对于获胜者来说，它需要两个条件:
+     *      1)投票者之间的绝对多数(50% + 1)。
+     *      2)无论如何投票数至少达到master->quorum。
+     * */
     di = dictGetIterator(counters);
     while((de = dictNext(di)) != NULL) {
         uint64_t votes = dictGetUnsignedIntegerVal(de);
@@ -4741,10 +4754,17 @@ char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
 
     /* Count this Sentinel vote:
      * if this Sentinel did not voted yet, either vote for the most
-     * common voted sentinel, or for itself if no vote exists at all. */
+     * common voted sentinel, or for itself if no vote exists at all.
+     * 计算这个哨兵的投票:
+     * 如果这个哨兵还没有投票，要么投票给最常见的哨兵，要么投票给自己 。
+     *
+     * 如果当前节点现在未投票， 则投票给获票最多的节点。如果没有选出最多的节点， 则投给自己.                                      <-[2]
+     * */
     if (winner)
+        // 如果发现了得票数最多的节点， 就把自己的票投给它
         myvote = sentinelVoteLeader(master,epoch,winner,&leader_epoch);
     else
+        // 否则的化，投票给自己
         myvote = sentinelVoteLeader(master,epoch,sentinel.myid,&leader_epoch);
 
     if (myvote && leader_epoch == epoch) {
@@ -4756,6 +4776,7 @@ char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
         }
     }
 
+    // 获票最多的节点其获票数如果不少于集群Sentinel节点数量的一半， 并且不小于目标实例属性quorum的值， 那么这个节点就是leader节点    <-[3]
     voters_quorum = voters/2+1;
     if (winner && (max_votes < voters_quorum || max_votes < master->quorum))
         winner = NULL;
@@ -5014,33 +5035,47 @@ sentinelRedisInstance *sentinelSelectSlave(sentinelRedisInstance *master) {
 
 /* ---------------- Failover state machine implementation ------------------- */
 void sentinelFailoverWaitStart(sentinelRedisInstance *ri) {
+    // ri： 要进行故障转移的master实例
+    // 这个函数会统计当前sentinel的得票结果，如果得票超过半数，那么当前节点就会发起故障转移
     char *leader;
     int isleader;
 
     /* Check if we are the leader for the failover epoch. */
+    // sentinelGetLeader函数会统计当前纪元的投票结果， 返回当选leader节点的myid属性。                                         <-[1]
     leader = sentinelGetLeader(ri, ri->failover_epoch);
+    // 当前节点是否当选为leader节点
     isleader = leader && strcasecmp(leader,sentinel.myid) == 0;
     sdsfree(leader);
 
     /* If I'm not the leader, and it is not a forced failover via
      * SENTINEL FAILOVER, then I can't continue with the failover. */
+    // 如果我不是领导者，并且它不是通过SENTINEL failover强制进行的故障转移，那么我就不能继续进行故障转移。                        <-[2]
+
+    // 如果当前sentinel节点非leader节点，则说明当前sentinel节点没有赢得选举或选举流程还没完成（可能部分sentinel节点未返回投票响应）， 此时退出函数。
     if (!isleader && !(ri->flags & SRI_FORCE_FAILOVER)) {
         int election_timeout = SENTINEL_ELECTION_TIMEOUT;
 
         /* The election timeout is the MIN between SENTINEL_ELECTION_TIMEOUT
          * and the configured failover timeout. */
+        // 选举超时时间（election_timeout）取目标实例属性failover_timeout与常量SENTINEL_ELECTION_TIMEOUT这两个值中的较小值。
         if (election_timeout > ri->failover_timeout)
             election_timeout = ri->failover_timeout;
         /* Abort the failover if I'm not the leader after some time. */
+        // 如果故障转移开始后过去的时间超过选举超时时间（election_timeout），则本次选举可能发生了选票瓜分，这是需要中止当前故障转移
+        // 注意，这里并没有更新目标实例属性failover_start_time， 所以下次开始故障转移时仍需要等待本次故障转移开始后过去时间超过目标实例属性failover_timeout*2的时间
         if (mstime() - ri->failover_start_time > election_timeout) {
             sentinelEvent(LL_WARNING,"-failover-abort-not-elected",ri,"%@");
+            // 退出故障转移(主要是更新master的flags)
             sentinelAbortFailover(ri);
         }
         return;
     }
+
+    // 这个消息表示sentinel之间已经选出来leader节点
     sentinelEvent(LL_WARNING,"+elected-leader",ri,"%@");
     if (sentinel.simfailure_flags & SENTINEL_SIMFAILURE_CRASH_AFTER_ELECTION)
         sentinelSimFailureCrash();
+    // [3] 如果当前sentinel节点是leader节点， 则进入 SENTINEL_FAILOVER_STATE_SELECT_SLAVE 状态
     ri->failover_state = SENTINEL_FAILOVER_STATE_SELECT_SLAVE;
     ri->failover_state_change_time = mstime();
     sentinelEvent(LL_WARNING,"+failover-state-select-slave",ri,"%@");
@@ -5247,18 +5282,23 @@ void sentinelFailoverStateMachine(sentinelRedisInstance *ri) {
 
     switch(ri->failover_state) {
         case SENTINEL_FAILOVER_STATE_WAIT_START:
+            // 统计投票选举结果
             sentinelFailoverWaitStart(ri);
             break;
         case SENTINEL_FAILOVER_STATE_SELECT_SLAVE:
+            // 选择晋升的从节点
             sentinelFailoverSelectSlave(ri);
             break;
         case SENTINEL_FAILOVER_STATE_SEND_SLAVEOF_NOONE:
+            // 将选择的从节点晋升为主节点
             sentinelFailoverSendSlaveOfNoOne(ri);
             break;
         case SENTINEL_FAILOVER_STATE_WAIT_PROMOTION:
+            // 等待晋升主节点完成
             sentinelFailoverWaitPromotion(ri);
             break;
         case SENTINEL_FAILOVER_STATE_RECONF_SLAVES:
+            // 使其它从节点与晋升的从节点建立复制关系
             sentinelFailoverReconfNextSlave(ri);
             break;
     }
