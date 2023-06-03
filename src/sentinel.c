@@ -1655,7 +1655,7 @@ void sentinelDelFlagsToDictOfRedisInstances(dict *instances, int flags) {
  *      3)删除运行时操作产生的大多数flags;
  *      4)将计时器重置为默认值。例如，在重置之后，可以尽快对同一个主机进行故障转移，而无需等待故障转移超时延迟;
  *      5)在此过程中撤销正在进行的故障转移;
- *      6)断开与主机的连接(将自动重新连接)。
+ *      6)断开与master的连接(将自动重新连接)。
  */
 
 #define SENTINEL_RESET_NO_SENTINELS (1<<0)
@@ -1670,6 +1670,7 @@ void sentinelResetMaster(sentinelRedisInstance *ri, int flags) {
         dictRelease(ri->sentinels);
         ri->sentinels = dictCreate(&instancesDictType,NULL);
     }
+    // 断开与当前master的连接，使的当前sentinel可以自动连接到新的master
     instanceLinkCloseConnection(ri->link,ri->link->cc);
     instanceLinkCloseConnection(ri->link,ri->link->pc);
     ri->flags &= SRI_MASTER;
@@ -1764,7 +1765,8 @@ int sentinelResetMasterAndChangeAddress(sentinelRedisInstance *master, char *hos
      * as a slave as well, so that we'll be able to sense / reconfigure
      * the old master.
      *
-     * 将旧的主节点也放入slaves中
+     * 将旧的主节点也放入slaves中。 注意这里，这是很关键的一点，旧的主节点是如何指向新的主节点的。                                 <-【1】
+     * 这里将旧的主节点添加slaves字典中之后，下次
      * */
     if (!sentinelAddrIsEqual(newaddr,master->addr)) {
         slaves[numslaves++] = dupSentinelAddr(master->addr);
@@ -1792,7 +1794,9 @@ int sentinelResetMasterAndChangeAddress(sentinelRedisInstance *master, char *hos
     zfree(slaves);
 
     /* Release the old address at the end so we are safe even if the function
-     * gets the master->addr->ip and master->addr->port as arguments. */
+     * gets the master->addr->ip and master->addr->port as arguments.
+     * 在最后释放旧地址，这样即使函数获得master->addr->ip和master->addr->port作为参数，我们也是安全的。
+     * */
     releaseSentinelAddr(oldaddr);
     sentinelFlushConfig(); // 重写配置
     return C_OK;
@@ -2889,6 +2893,7 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
         /* Nothing to do, but masters claiming to be slaves are
          * considered to be unreachable by Sentinel, so eventually
          * a failover will be triggered.
+         *
          * 什么都不做，但是声称是slave的master被哨兵认为是不可访问的，所以最终会触发故障转移。
          * */
     }
@@ -2935,7 +2940,13 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
              * going forward, to receive new configs if any.
              *
              * slave变成了master。我们希望强制将我们的视图重新配置为slave视图。在更改之后等待一段时间，然后再继续，以接收新的配置(如果有的话)。
-             * 处理非故障转移状态下slave变为master的场景。比如可能直接在slave上执行了一次slaveof no one命令
+             * 为什么要等待一段时间呢？因为可能有其他sentinel节点也发现了这个slave节点变成了master，但是他们的配置纪元可能比当前节点的配置纪元要高（一般就是指上次故障转移的leader节点），
+             *
+             * 处理 slave变为master的场景。比如可能直接在slave上执行了一次slaveof no one命令。
+             * 以及更重要的：在故障转移完成后，leader节点会将旧的master节点添加到故障转移实例的slaves字典中，此时在leader节点的视角，
+             * 看来，旧的master节点是一个slave， 但是由于旧的master节点尚未执行slaveof命令，所以实际的info中返回的还是一个master,
+             * 并且该实例目前也并未处于故障转移状态，所以会走进这个分支，由 sentinel leader 节点对old master节点执行一次slaveof命令。
+             *
              * */
             mstime_t wait_time = SENTINEL_PUBLISH_PERIOD*4;
 
@@ -4012,16 +4023,20 @@ NULL
         if (c->argc != 3) goto numargserr;
         if ((ri = sentinelGetMasterByNameOrReplyError(c,c->argv[2])) == NULL)
             return;
+        // 已经有进行中的故障转移就退出
         if (ri->flags & SRI_FAILOVER_IN_PROGRESS) {
             addReplyError(c,"-INPROG Failover already in progress");
             return;
         }
+        // 看看有没有合适的从节点
         if (sentinelSelectSlave(ri) == NULL) {
             addReplyError(c,"-NOGOODSLAVE No suitable replica to promote");
             return;
         }
         serverLog(LL_WARNING,"Executing user requested FAILOVER of '%s'",
             ri->name);
+        // sentinel failover命令中的启动failover                                                                          <-【1】
+        // 只是设置一些状态，剩下的交给sentinel的定时任务机制
         sentinelStartFailover(ri);
         ri->flags |= SRI_FORCE_FAILOVER;
         addReply(c,shared.ok);
@@ -5301,19 +5316,39 @@ void sentinelFailoverWaitPromotion(sentinelRedisInstance *ri) {
     }
 }
 
+/**
+ * 检测故障转移是否完成。正常情况下，故障转移完成的标志是：
+ *      1. 从节点晋升为主节点
+ *      2. 排除断线的节点，所有旧的从节点都已经成功连接到新的主节点（即从节点的master_host为新的master，并且master_link_state为up）
+ * 此时，sentinel就认为故障转移完成了。
+ * 注意：
+ *      这里的从节点是不包含被故障转移的主节点的！！！ 此时当前sentinel尚未更新自己的master和slave字典(要在进入 SENTINEL_FAILOVER_STATE_UPDATE_CONFIG 状态之后才会更新，此时还是SENTINEL_FAILOVER_STATE_RECONF_SLAVES状态)
+ *      所以即使旧的主节点完全不可达，但丝毫不影响故障转移结束
+ *
+ * 但是如果从变更为 SENTINEL_FAILOVER_STATE_RECONF_SLAVES 状态开始，经过failover_timeout长的时间之后，
+ * 从节点依旧没有成功指向主节点（包括slaveof命令无法成功发送给从节点，或者从节点收到了，但无法和主节点连接等），则认为故障转移超时，此时也会强制结束故障转移
+ * @param master
+ */
 void sentinelFailoverDetectEnd(sentinelRedisInstance *master) {
     int not_reconfigured = 0, timeout = 0;
     dictIterator *di;
     dictEntry *de;
+    // 上一次主从切换状态变更到现在的时间。其实就是 SENTINEL_FAILOVER_STATE_RECONF_SLAVES 阶段开始到现在的时间
     mstime_t elapsed = mstime() - master->failover_state_change_time;
 
     /* We can't consider failover finished if the promoted slave is
-     * not reachable. */
+     * not reachable.
+     * 如果提升的从服务器不可达，我们不能认为故障转移已经完成。
+     * */
     if (master->promoted_slave == NULL ||
         master->promoted_slave->flags & SRI_S_DOWN) return;
 
     /* The failover terminates once all the reachable slaves are properly
-     * configured. */
+     * configured.
+     * 一旦正确配置（slaveof）了所有可访问的从服务器，故障转移就会终止。
+     *
+     * 注意：这里的这个slave字典包含了原本所有的从节点以及晋升的从节点，但不包含宕机的主节点
+     * */
     di = dictGetIterator(master->slaves);
     while((de = dictNext(di)) != NULL) {
         sentinelRedisInstance *slave = dictGetVal(de);
@@ -5325,7 +5360,8 @@ void sentinelFailoverDetectEnd(sentinelRedisInstance *master) {
     dictReleaseIterator(di);
 
     /* Force end of failover on timeout.
-     * 命令其余从节点复制新的主节点的执行时间超过了failover-timeout（不包含复制时间）， 则故障转移失败。注意即使超过了这个时间，Sentinel节点也会最终配置从节点去同步最新的主节点
+     * 命令其余从节点复制新的主节点的执行时间超过了failover-timeout（不包含复制时间）， 则故障转移失败。
+     * 注意即使超过了这个时间，Sentinel节点也会最终配置从节点去同步最新的主节点
      * */
     if (elapsed > master->failover_timeout) {
         not_reconfigured = 0;
@@ -5333,6 +5369,7 @@ void sentinelFailoverDetectEnd(sentinelRedisInstance *master) {
         sentinelEvent(LL_WARNING,"+failover-end-for-timeout",master,"%@");
     }
 
+    // not_reconfigured意味着没有从节点需要发送slaveof指令了
     if (not_reconfigured == 0) {
         sentinelEvent(LL_WARNING,"+failover-end",master,"%@");
         master->failover_state = SENTINEL_FAILOVER_STATE_UPDATE_CONFIG;
@@ -5369,7 +5406,7 @@ void sentinelFailoverDetectEnd(sentinelRedisInstance *master) {
 /* Send SLAVE OF <new master address> to all the remaining slaves that
  * still don't appear to have the configuration updated.
  *
- * 给所有未更新配置的剩余从服务器发送SLAVE OF <new master address>命令
+ * 给所有发送slaveof 命令的剩余从服务器发送SLAVE OF <new master address>命令
  * */
 void sentinelFailoverReconfNextSlave(sentinelRedisInstance *master) {
     dictIterator *di;
@@ -5437,13 +5474,14 @@ void sentinelFailoverReconfNextSlave(sentinelRedisInstance *master) {
 
     /* Check if all the slaves are reconfigured and handle timeout. */
     //                                                                                                                  <-【6】
-    // 统计所有从节点的主从状态， 如果所有从节点（剔除下线的节点）都存在SRI_RECONF_DONE标记，则故障转移状态切换到SENTINEL_FAILOVER_STATE_UPDATE_CONFIG
+    // 统计所有从节点的主从状态， 如果所有从节点（剔除下线的节点）都存在 SRI_RECONF_DONE 标记，则故障转移状态切换到 SENTINEL_FAILOVER_STATE_UPDATE_CONFIG
     sentinelFailoverDetectEnd(master);
 }
 
 /* This function is called when the slave is in
  * SENTINEL_FAILOVER_STATE_UPDATE_CONFIG state. In this state we need
  * to remove it from the master table and add the promoted slave instead.
+ *
  * 当从机处于SENTINEL_FAILOVER_STATE_UPDATE_CONFIG状态时调用该函数。
  * 在这种状态下，我们需要从masters字典中中删除旧的master节点，并添加提升的从到masters中。
  * */

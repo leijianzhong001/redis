@@ -2613,12 +2613,15 @@ int cancelReplicationHandshake(int reconnect) {
     return 1;
 }
 
-/* Set replication to the specified master address and port. */
+/* Set replication to the specified master address and port.
+ * 该函数非常重要，用于建立复制关系
+ * */
 void replicationSetMaster(char *ip, int port) {
     int was_master = server.masterhost == NULL;
 
     sdsfree(server.masterhost);
     server.masterhost = NULL;
+    // 如果当前已经连接了主节点，则断开之前的主从连接                                                                         <-【1】
     if (server.master) {
         freeClient(server.master);
     }
@@ -2626,7 +2629,10 @@ void replicationSetMaster(char *ip, int port) {
 
     /* Setting masterhost only after the call to freeClient since it calls
      * replicationHandleMasterDisconnection which can trigger a re-connect
-     * directly from within that call. */
+     * directly from within that call.
+     * 仅在调用freeClient之后设置masterhost，因为它调用了replicationHandleMasterDisconnection，这可以在该调用中直接触发重新连接。
+     * 特别注意这里的这个操作， 在server.masterhost被赋值之后，info中返回的role就会由master变为slave                           <-【2】
+     * */
     server.masterhost = sdsnew(ip);
     server.masterport = port;
 
@@ -2635,10 +2641,13 @@ void replicationSetMaster(char *ip, int port) {
 
     /* Force our slaves to resync with us as well. They may hopefully be able
      * to partially resync with us, but we can notify the replid change. */
+    // 断开当前服务器所有的从节点连接，使这些从节点重新发起同步流程                                                             <-【3】
     disconnectSlaves();
     cancelReplicationHandshake(0);
     /* Before destroying our master state, create a cached master using
-     * our own parameters, to later PSYNC with the new master. */
+     * our own parameters, to later PSYNC with the new master.
+     * 在销毁我们的主状态之前，使用我们自己的参数创建一个缓存的主，以便稍后与新的主进行PSYNC。
+     * */
     if (was_master) {
         replicationDiscardCachedMaster();
         replicationCacheMasterUsingMyself();
@@ -2654,7 +2663,8 @@ void replicationSetMaster(char *ip, int port) {
         moduleFireServerEvent(REDISMODULE_EVENT_MASTER_LINK_CHANGE,
                               REDISMODULE_SUBEVENT_MASTER_LINK_DOWN,
                               NULL);
-
+    // 将 server.repl_state 设置为 REPL_STATE_CONNECT，表示当前服务器正在尝试连接主节点，
+    // 这个状态会在 replicationCron 函数中被处理，从而发起复制流程
     server.repl_state = REPL_STATE_CONNECT;
     serverLog(LL_NOTICE,"Connecting to MASTER %s:%d",
         server.masterhost, server.masterport);
@@ -2749,7 +2759,9 @@ void replicationHandleMasterDisconnection(void) {
 
 void replicaofCommand(client *c) {
     /* SLAVEOF is not allowed in cluster mode as replication is automatically
-     * configured using the current address of the master node. */
+     * configured using the current address of the master node.
+     * 在集群模式下不允许使用SLAVEOF，因为复制是使用主节点的当前地址自动配置的。
+     * */
     if (server.cluster_enabled) {
         addReplyError(c,"REPLICAOF not allowed in cluster mode.");
         return;
