@@ -156,7 +156,10 @@ typedef long long ustime_t; /* microsecond time type. */
 /* When configuring the server eventloop, we setup it so that the total number
  * of file descriptors we can handle are server.maxclients + RESERVED_FDS +
  * a few more to stay safe. Since RESERVED_FDS defaults to 32, we add 96
- * in order to make sure of not over provisioning more than 128 fds. */
+ * in order to make sure of not over provisioning more than 128 fds.
+ * 在配置服务器eventloop时，我们设置它，以便我们可以处理的文件描述符的总数是服务器 maxclients + RESERVED_FDS + 几个以保持安全。
+ * 由于 RESERVED_FDS 默认为32，因此我们添加96以确保不会过度配置超过128个fds。
+ * */
 #define CONFIG_FDSET_INCR (CONFIG_MIN_RESERVED_FDS+96)
 
 /* OOM Score Adjustment classes. */

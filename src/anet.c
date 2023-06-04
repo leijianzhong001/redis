@@ -398,12 +398,31 @@ int anetUnixGenericConnect(char *err, const char *path, int flags)
 }
 
 static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len, int backlog) {
+    // 【1】 在创建套接字之后， 为套接字分配ip地址和端口号。
+    /**
+     * bind函数的函数原型为：int bind(int sockfd, struct sockaddr *myaddr, socklen_t addrlen)
+     *      sockfd: 待发分配ip地址和端口号的套接字文件描述符
+     *      myaddr: 存储地址信息的结构体
+     *      addrlen: 第二个结构体变量的长度
+     * sockaddr的结构体如下：
+     *      struct sockaddr {
+     *          sa_family_t sa_family;      // 地址族，如AF_INET、AF_INET6、AF_LOCAL等
+     *          char        sa_data[14];    // 具体的地址信息
+     *      };
+     */
     if (bind(s,sa,len) == -1) {
         anetSetError(err, "bind: %s", strerror(errno));
         close(s);
         return ANET_ERR;
     }
 
+    // 【2】 服务器套接字转化为可以接收连接的状态。
+    /**
+     * listen函数原型为: int listen(int sock, int backlog)
+     *      sock: 待处理的套接字的文件描述符
+     *      backlog: 连接请求等待队列长度。，若为5， 则队列长度为5，表示最多接收5个连接请求进入队列。
+     *              客户端向服务器询问是否允许连接，如果服务器发现请求等待队列还有空位，则回复允许连接，并将连接请求添加到请求等待队列中等待处理
+     */
     if (listen(s, backlog) == -1) {
         anetSetError(err, "listen: %s", strerror(errno));
         close(s);
@@ -421,32 +440,59 @@ static int anetV6Only(char *err, int s) {
     return ANET_OK;
 }
 
+/**
+ *
+ * @param err 用于记录错误信息
+ * @param port 绑定的端口
+ * @param bindaddr 绑定的ip地址
+ * @param af 指定ip类型为ipv4或ipv6
+ * @param backlog
+ * @return
+ */
 static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backlog)
 {
     int s = -1, rv;
     char _port[6];  /* strlen("65535") */
     struct addrinfo hints, *servinfo, *p;
 
+
     snprintf(_port,6,"%d",port);
     memset(&hints,0,sizeof(hints));
-    hints.ai_family = af;
-    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_family = af; // 协议族类型为ipv4或ipv6
+    hints.ai_socktype = SOCK_STREAM; // 面向连接的套接字，使用TCP协议；
     hints.ai_flags = AI_PASSIVE;    /* No effect if bindaddr != NULL */
     if (bindaddr && !strcmp("*", bindaddr))
         bindaddr = NULL;
     if (af == AF_INET6 && bindaddr && !strcmp("::*", bindaddr))
         bindaddr = NULL;
 
+    // 【1】 getaddrinfo 函数将主机名或者点分十进制的ip地址解析为数字格式的ip地址。
     if ((rv = getaddrinfo(bindaddr,_port,&hints,&servinfo)) != 0) {
         anetSetError(err, "%s", gai_strerror(rv));
         return ANET_ERR;
     }
+    // 【2】 处理 getaddrinfo 返回的所有ip地址
     for (p = servinfo; p != NULL; p = p->ai_next) {
+        // 【3】 调用c语言的socket函数，创建一个IPv4/IPv6协议族中面向连接的Socket套接字 .
+        /**
+         * socket函数原型为 int socket(int domain, int type, int protocol)
+         *      domain: 套接字中使用的协议族（Protocol Family）， 有如下值：
+         *          PF_INET: IPv4互联网协议族
+         *          PF_INET6: IPv6互联网协议族
+         *          PF_LOCAL: 本地通信的UNIX协议族
+         *      type: 套接字数据传输类型：
+         *          SOCK_STREAM: 面向连接的套接字，使用TCP协议；
+         *          SOCK_DGRAM: 面向消息的套接字，使用UDP协议。
+         *      protocol: 传输协议。常用的有 IPPROTO_TCP 和 IPPROTO_UDP , 分别表示TCP传输协议和UDP传输协议。通常为0， 操作系统会自动判断协议类型。
+         */
         if ((s = socket(p->ai_family,p->ai_socktype,p->ai_protocol)) == -1)
             continue;
 
+        // 【4】 anetV6Only 函数开启ipv6连接的 IPV6_V6ONLY 标志，限制该连接仅能发送和接收ipv6数据包
         if (af == AF_INET6 && anetV6Only(err,s) == ANET_ERR) goto error;
+        // 调用 anetSetReuseAddr 函数开启TCP的 SO_REUSEADDR 选项，保证端口被释放后可以立即再次使用
         if (anetSetReuseAddr(err,s) == ANET_ERR) goto error;
+        // 【5】 调用 anetListen 函数监听端口
         if (anetListen(err,s,p->ai_addr,p->ai_addrlen,backlog) == ANET_ERR) s = ANET_ERR;
         goto end;
     }
@@ -494,6 +540,20 @@ int anetUnixServer(char *err, char *path, mode_t perm, int backlog)
 static int anetGenericAccept(char *err, int s, struct sockaddr *sa, socklen_t *len) {
     int fd;
     while(1) {
+        // 【1】 accept 函数用于处理等待队列中的连接请求。
+        /**
+         * accept的函数原型为：int accept(int sock, struct sockaddr *addr, socklen_t *addrlent), 成功则返回创建的数据套接字的文件描述符
+         *      sock: 服务器监听套接字文件描述符；
+         *      addr: 用于保存客户端地址信息，函数调用完以后，会填充客户端地址信息到该参数指向的结构体
+         *      addrlent: 第二个参数变量的长度
+         * 函数调用成功后，accept 函数将自动创建一个用于数据IO的套接字，并将该套接字与发起请求的客户端建立连接。 通过该套接字， 服务器可以与客户端完成数据交换。
+         * 数据套接字与监听套接字有所不同：
+         *      监听套接字：负责监听、处理新的连接请求；
+         *      数据套接字：负责完成服务器与客户端之间的数据交换
+         * 如果当前没有待处理的请求并且套接字没有设置为非阻塞模式， 则accept函数会一直阻塞直到新的连接请求进来。
+         * 如果套接字设置为非阻塞模式并且没有待处理的请求，accept 函数会立即返回，并设置 errno 为 EAGAIN 或 EWOULDBLOCK
+         * errno 是POSIX标准定义的一个全局变量，记录当前线程的最后一次错误代码。
+         */
         fd = accept(s,sa,len);
         if (fd == -1) {
             if (errno == EINTR)
@@ -505,6 +565,7 @@ static int anetGenericAccept(char *err, int s, struct sockaddr *sa, socklen_t *l
         }
         break;
     }
+    // 返回该连接的数据套接字文件描述符
     return fd;
 }
 
@@ -512,6 +573,7 @@ int anetTcpAccept(char *err, int s, char *ip, size_t ip_len, int *port) {
     int fd;
     struct sockaddr_storage sa;
     socklen_t salen = sizeof(sa);
+    // 接收新的客户端连接，并返回数据套接字文件描述符。
     if ((fd = anetGenericAccept(err,s,(struct sockaddr*)&sa,&salen)) == -1)
         return ANET_ERR;
 

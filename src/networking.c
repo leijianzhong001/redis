@@ -1202,7 +1202,7 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(mask);
     UNUSED(privdata);
 
-    // 【1】 每次事件循环最多接收 1000 个客户端请求，方式短时间内处理过多客户请求导致工作线程阻塞
+    // 【1】 每次事件循环最多接收 1000 个客户端请求，防止短时间内处理过多客户请求导致工作线程阻塞
     while(max--) {
         // 【2】 anetTcpAccept函数会调用C语言的accept函数接收新的客户端连接，并返回数据套接字文件描述符。
         // 如果当前没有待处理的连接请求，则该函数返回 ANET_ERR, 这时会退出函数。如果有新的请求进来时，Redis事件循环器会重新调用 acceptTcpHandler 函数

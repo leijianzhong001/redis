@@ -3022,11 +3022,16 @@ void closeSocketListeners(socketFds *sfd) {
 }
 
 /* Create an event handler for accepting new connections in TCP or TLS domain sockets.
- * This works atomically for all socket fds */
+ * This works atomically for all socket fds
+ * 对指定socket上的所有文件描述符（sfd这个值将从操作系统获得）注册一个读就绪事件的处理函数
+ * 这里的sfd的数据来源是 listenToPort 函数监听到的网络套接字
+ * */
 int createSocketAcceptHandler(socketFds *sfd, aeFileProc *accept_handler) {
     int j;
 
     for (j = 0; j < sfd->count; j++) {
+        // 在IO多路复用模型中，当新的连接进来之后，会触发监听套接字的可读事件，所以这里只需要监听服务器套接字的AE_READABLE事件即可。
+        // 所以当有新的连接请求进来时，会触发accept_handler函数，通过accept创建真实的数据套接字，以完成客户端和服务器的数据交换
         if (aeCreateFileEvent(server.el, sfd->fd[j], AE_READABLE, accept_handler,NULL) == AE_ERR) {
             /* Rollback */
             for (j = j-1; j >= 0; j--) aeDeleteFileEvent(server.el, sfd->fd[j], AE_READABLE);
@@ -3053,13 +3058,20 @@ int createSocketAcceptHandler(socketFds *sfd, aeFileProc *accept_handler) {
  * error, at least one of the server.bindaddr addresses was
  * impossible to bind, or no bind addresses were specified in the server
  * configuration but the function is not able to bind * for at least
- * one of the IPv4 or IPv6 protocols. */
+ * one of the IPv4 or IPv6 protocols.
+ * Redis启动时， 会调用 listenToPort 打开套接字， 并绑定端口
+ * */
 int listenToPort(int port, socketFds *sfd) {
     int j;
     char **bindaddr = server.bindaddr;
     int bindaddr_count = server.bindaddr_count;
+    // 网络地址*和-::*分别表示IPv4和IPv6的通配地址。
+    //      - 对于IPv4，网络地址*表示的是0.0.0.0，它代表的是所有本地网络接口的地址。
+    //      - 对于IPv6，网络地址-::*表示的是::，它也代表的是所有本地网络接口的地址。
+    //在网络编程中，这些通配地址通常用于指定服务器所监听的地址，比如在TCP服务器中，如果将IP地址绑定为0.0.0.0或者::，那么服务器就会监听所有本地网络接口的连接请求。
     char *default_bindaddr[2] = {"*", "-::*"};
 
+    // 【1】 如果配置项中没有指定ip地址，则使用默认值：绑定网络地址两个，分别为 "*", "-::*"
     /* Force binding of 0.0.0.0 if no bind address is specified. */
     if (server.bindaddr_count == 0) {
         bindaddr_count = 2;
@@ -3070,10 +3082,13 @@ int listenToPort(int port, socketFds *sfd) {
         char* addr = bindaddr[j];
         int optional = *addr == '-';
         if (optional) addr++;
+        // 在C语言中，strchr函数用于在一个字符串中查找指定字符的第一个匹配位置，并返回该位置的指针。如果未找到该字符，则返回NULL指针
         if (strchr(addr,':')) {
+            // 【3】 绑定ipv6地址
             /* Bind IPv6 address. */
             sfd->fd[sfd->count] = anetTcp6Server(server.neterr,port,addr,server.tcp_backlog);
         } else {
+            // 【4】 绑定ipv4地址
             /* Bind IPv4 address. */
             sfd->fd[sfd->count] = anetTcpServer(server.neterr,port,addr,server.tcp_backlog);
         }
@@ -3093,6 +3108,7 @@ int listenToPort(int port, socketFds *sfd) {
             closeSocketListeners(sfd);
             return C_ERR;
         }
+        // 【5】 设置套接字为非阻塞模式
         anetNonBlock(NULL,sfd->fd[sfd->count]);
         anetCloexec(sfd->fd[sfd->count]);
         sfd->count++;
@@ -3205,10 +3221,13 @@ void initServer(void) {
         exit(1);
     }
 
+    // 创建共享数据集。如小数字 0~9999、常用字符串+OK\r\n(处理成功返回字符串)、+PONG\r\n(ping命令响应字符串)
     createSharedObjects();
+    // adjustOpenFilesLimit 函数尝试修改环境变量，提供系统打开的文件描述符上限，避免由于大量客户端连接导致错误                    <-【1】
     adjustOpenFilesLimit();
     const char *clk_msg = monotonicInit();
     serverLog(LL_NOTICE, "monotonic clock: %s", clk_msg);
+    // 创建一个事件循环器， 存储在 server.el 属性中                                                                         <-【2】
     server.el = aeCreateEventLoop(server.maxclients+CONFIG_FDSET_INCR);
     if (server.el == NULL) {
         serverLog(LL_WARNING,
@@ -3218,6 +3237,7 @@ void initServer(void) {
     }
     server.db = zmalloc(sizeof(redisDb)*server.dbnum);
 
+    // 如果配置了server.port，则开启TCP Socket服务，接收用户请求                                                              <-【3】
     /* Open the TCP listening socket for the user commands. */
     if (server.port != 0 &&
         listenToPort(server.port,&server.ipfd) == C_ERR) {
@@ -3225,6 +3245,7 @@ void initServer(void) {
         serverLog(LL_WARNING, "Failed listening on port %u (TCP), aborting.", server.port);
         exit(1);
     }
+    // 如果配置了tls_port， 则开始TLS Socket服务，Redis6.0开始支持tls连接
     if (server.tls_port != 0 &&
         listenToPort(server.tls_port,&server.tlsfd) == C_ERR) {
         /* Note: the following log text is matched by the test suite. */
@@ -3245,12 +3266,14 @@ void initServer(void) {
         anetCloexec(server.sofd);
     }
 
+    // 如果什么都没有配置，则报错退出
     /* Abort if there are no listening sockets at all. */
     if (server.ipfd.count == 0 && server.tlsfd.count == 0 && server.sofd < 0) {
         serverLog(LL_WARNING, "Configured to not listen anywhere, exiting.");
         exit(1);
     }
 
+    // 初始化数据库DB，用于存储数据                                                                                        <-【3】
     /* Create the Redis databases, and initialize other internal state. */
     for (j = 0; j < server.dbnum; j++) {
         server.db[j].dict = dictCreate(&dbDictType,NULL);
@@ -3264,6 +3287,7 @@ void initServer(void) {
         server.db[j].defrag_later = listCreate();
         listSetFreeMethod(server.db[j].defrag_later,(void (*)(void*))sdsfree);
     }
+    // evictionPoolAlloc 函数初始化LRU/LFU本地样本池， 用于实现LRU/LFU近似算法
     evictionPoolAlloc(); /* Initialize the LRU keys pool. */
     server.pubsub_channels = dictCreate(&keylistDictType,NULL);
     server.pubsub_patterns = dictCreate(&keylistDictType,NULL);
@@ -3315,6 +3339,7 @@ void initServer(void) {
     server.aof_last_write_errno = 0;
     server.repl_good_slaves_count = 0;
 
+    // 创建一个时间事件， 执行函数为ServerCron, 负责处理redis中的定时任务，如清理过期数据，生成RDB文件等                          <-【10】
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like clients timeout, eviction of unaccessed
      * expired keys and so forth. */
@@ -3323,9 +3348,11 @@ void initServer(void) {
         exit(1);
     }
 
+    // 分别为TCP Socket、TLS Socks、Unix Socket 注册 AE_READABLE 文件事件的处理函数，处理函数分别为acceptTcpHandler，acceptTLSHandler， acceptUnixHandler <-【11】
+    // 这些函数负责接收Socket中的新连接
     /* Create an event handler for accepting new connections in TCP and Unix
      * domain sockets. */
-    // 为socket连接server.ipfd注册AE_READABLE文件事件的回调函数 acceptTcpHandler，该函数负责接收客户端连接，创建数据交换套接字，并为数据套接字注册文件事件回调函数
+    // 为socket连接server.ipfd注册 AE_READABLE 文件事件的回调函数 acceptTcpHandler，该函数负责接收客户端连接，创建数据交换套接字，并为数据套接字注册文件事件回调函数
     if (createSocketAcceptHandler(&server.ipfd, acceptTcpHandler) != C_OK) {
         serverPanic("Unrecoverable error creating TCP socket accept handler.");
     }
@@ -3345,11 +3372,13 @@ void initServer(void) {
                 "blocked clients subsystem.");
     }
 
+    //  注册事件循环器的钩子函数，事件循环器在每次阻塞前后都会调用钩子函数                                                      <-【12】
     /* Register before and after sleep handlers (note this needs to be done
      * before loading persistence since it is used by processEventsWhileBlocked. */
     aeSetBeforeSleepProc(server.el,beforeSleep);
     aeSetAfterSleepProc(server.el,afterSleep);
 
+    // 如果开启了aof,则预先打开aof文件                                                                                     <-【13】
     /* Open the AOF file if needed. */
     if (server.aof_state == AOF_ON) {
         server.aof_fd = open(server.aof_filename,
@@ -3361,6 +3390,7 @@ void initServer(void) {
         }
     }
 
+    // 如果redis运行在32位操作系统上，由于32位操作系统内存空间限制为4GB, 所以将redis的使用内存限制为3GB, 避免redis服务器因内存不足而崩溃<-【14】
     /* 32 bit instances are limited to 4GB of address space, so if there is
      * no explicit limit in the user provided configuration we set a limit
      * at 3 GB using maxmemory with 'noeviction' policy'. This avoids
@@ -3371,10 +3401,15 @@ void initServer(void) {
         server.maxmemory_policy = MAXMEMORY_NO_EVICTION;
     }
 
+    // 【15】 如果redis以Cluster模式启动，则调用clusterInit函数初始化Cluster机制
     if (server.cluster_enabled) clusterInit();
+    // 初始化server.repl_scriptcache_dict属性
     replicationScriptCacheInit();
+    // 初始化LUA机制
     scriptingInit(1);
+    // 初始化慢日志机制
     slowlogInit();
+    // 初始化延迟监控机制
     latencyMonitorInit();
     
     /* Initialize ACL default password if it exists */

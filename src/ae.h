@@ -68,44 +68,59 @@ typedef int aeTimeProc(struct aeEventLoop *eventLoop, long long id, void *client
 typedef void aeEventFinalizerProc(struct aeEventLoop *eventLoop, void *clientData);
 typedef void aeBeforeSleepProc(struct aeEventLoop *eventLoop);
 
-/* File event structure */
+/* File event structure
+ * aeFileEvent 存储了一个文件描述符上已注册的文件事件
+ * aeFileEvent 中并没有记录文件描述符的fd属性。POSIX标准对文件描述符fd有如下约束：
+ *      1、值为0、1、2的文件描述符分别表述标准输入、标准输出、和错误输出
+ *      2、每次打开新的文件描述符，必须使用当前进程中最小可用的文件描述符
+ * redis充分利用文件描述符的这些特点， ，定义了一个数组 aeEventLoop.events来存储已注册的文件事件。数组索引即文件描述符，数组元素即该文件描述符
+ * 上注册的文件事件，如aeEventLoop.events[99]存放了置为99的文件描述符的文件事件
+ *
+ * */
 typedef struct aeFileEvent {
-    int mask; /* one of AE_(READABLE|WRITABLE|BARRIER) */
-    aeFileProc *rfileProc;
-    aeFileProc *wfileProc;
-    void *clientData;
+    int mask; /* one of AE_(READABLE|WRITABLE|BARRIER)                         已注册的文件事件类型 */
+    aeFileProc *rfileProc; /*                                                  RE_ADABLE 事件处理函数 */
+    aeFileProc *wfileProc; /*                                                  WR_ITABLE 事件处理函数 */
+    void *clientData; /*                                                       附加数据 */
 } aeFileEvent;
 
-/* Time event structure */
+/* Time event structure
+ * 存储已注册的事件事件信息
+ * */
 typedef struct aeTimeEvent {
-    long long id; /* time event identifier. */
-    monotime when;
-    aeTimeProc *timeProc;
-    aeEventFinalizerProc *finalizerProc;
-    void *clientData;
-    struct aeTimeEvent *prev;
-    struct aeTimeEvent *next;
+    long long id; /* time event identifier.                                     时间事件id */
+    monotime when; /*                                                           时间事件的下一次执行的微妙数(UNIX时间戳) */
+    aeTimeProc *timeProc; /*                                                    时间事件处理函数 */
+    aeEventFinalizerProc *finalizerProc; /*                                     时间事件终结函数 */
+    void *clientData; /*                                                        客户端传入的附加数据 */
+    struct aeTimeEvent *prev; /*                                                指向前一个时间事件 */
+    struct aeTimeEvent *next; /*                                                指向后一个时间事件 */
     int refcount; /* refcount to prevent timer events from being
   		   * freed in recursive time event calls. */
 } aeTimeEvent;
 
-/* A fired event */
+/* A fired event
+ * IO复用层(ae_epoll.c、ae_evport.c等)会将已就绪的事件转化为 aeFiredEvent ， 存放在 aeEventLoop.fired数组中，等待事件循环器处理
+ * */
 typedef struct aeFiredEvent {
-    int fd;
-    int mask;
+    int fd; /*                                                                 产生事件的文件描述符 */
+    int mask; /*                                                               产生的事件类型 */
 } aeFiredEvent;
 
-/* State of an event based program */
+/* State of an event based program
+ *
+ * redis中的事件循环器， 负责管理事件
+ * */
 typedef struct aeEventLoop {
-    int maxfd;   /* highest file descriptor currently registered */
-    int setsize; /* max number of file descriptors tracked */
-    long long timeEventNextId;
-    aeFileEvent *events; /* Registered events */
-    aeFiredEvent *fired; /* Fired events */
-    aeTimeEvent *timeEventHead;
-    int stop;
-    void *apidata; /* This is used for polling API specific data */
-    aeBeforeSleepProc *beforesleep;
+    int maxfd;   /* highest file descriptor currently registered       当前已注册的最大文件描述符 */
+    int setsize; /* max number of file descriptors tracked             该事件循环器允许监听的最大的文件描述符 */
+    long long timeEventNextId; /*                                      下一个事件时间id */
+    aeFileEvent *events; /* Registered events                          已注册的文件事件表 */
+    aeFiredEvent *fired; /* Fired events                               已就绪的事件表 */
+    aeTimeEvent *timeEventHead; /*                                     时间事件表的头节点指针 */
+    int stop; /*                                                       事件循环器是否停止 */
+    void *apidata; /* This is used for polling API specific data       存放用于IO复用层的附加数据 */
+    aeBeforeSleepProc *beforesleep; /*                                 进程阻塞前后调用的钩子函数 */
     aeBeforeSleepProc *aftersleep;
     int flags;
 } aeEventLoop;
