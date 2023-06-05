@@ -298,7 +298,10 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
  * will require a reallocation.
  *
  * After the call, the passed sds string is no longer valid and all the
- * references must be substituted with the new pointer returned by the call. */
+ * references must be substituted with the new pointer returned by the call.
+ * 重新分配sds字符串，使其末尾没有空闲空间。所包含的字符串保持不变，但下一个连接操作将需要重新分配。
+ * 调用之后，传递的sds字符串不再有效，所有引用必须用调用返回的新指针替换。
+ * */
 sds sdsRemoveFreeSpace(sds s) {
     void *sh, *newsh;
     char type, oldtype = s[-1] & SDS_TYPE_MASK;
@@ -342,6 +345,12 @@ sds sdsRemoveFreeSpace(sds s) {
  * 2) The string.
  * 3) The free buffer at the end if any.
  * 4) The implicit null term.
+ *
+ * 返回指定的sds字符串分配的总大小，包括:
+ *      1)指针前的sds头。
+ *      2)字符串。
+ *      3)如果有的话，最后的空闲缓冲区。
+ *      4)隐式null项。
  */
 size_t sdsAllocSize(sds s) {
     size_t alloc = sdsalloc(s);

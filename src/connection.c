@@ -49,6 +49,9 @@
  *    depending on the implementation (for TCP they are; for TLS they aren't).
  */
 
+// 这段代码定义了一个名为CT_Socket的ConnectionType类型变量。
+// 它实际上是ConnectionType结构体的一个实例，可以使用其中的函数指针对连接进行相关操作。
+// 在这个变量被定义之后，我们可以通过调用其中的函数指针来进行连接的控制和管理。
 ConnectionType CT_Socket;
 
 /* When a connection is created we must know its type already, but the
@@ -91,8 +94,12 @@ connection *connCreateSocket() {
  * Callers should use connGetState() and verify the created connection
  * is not in an error state (which is not possible for a socket connection,
  * but could but possible with other protocols).
+ *
+ * redis在收到连接请求的时候， 会调用 connCreateAcceptedSocket 函数为网络连接创建一个 connection ， 这些 connection 的 type 属性都指向 CT_Socket。
+ * CT_Socket 指定了所有操作Socket连接的函数
  */
 connection *connCreateAcceptedSocket(int fd) {
+    // fd 为accept到的数据套接字文件描述符
     connection *conn = connCreateSocket();
     conn->fd = fd;
     conn->state = CONN_STATE_ACCEPTING;
@@ -242,6 +249,7 @@ static int connSocketSetReadHandler(connection *conn, ConnectionCallbackFunc fun
     if (!conn->read_handler)
         aeDeleteFileEvent(server.el,conn->fd,AE_READABLE);
     else
+        // 将参数上中的 ConnectionCallbackFunc 指定为 当前连接的数据套接字文件描述符fd的读事件回调函数， 实际上这个回调函数是 readQueryFromClient
         if (aeCreateFileEvent(server.el,conn->fd,
                     AE_READABLE,conn->type->ae_handler,conn) == AE_ERR) return C_ERR;
     return C_OK;
@@ -345,15 +353,17 @@ static int connSocketGetType(connection *conn) {
     return CONN_TYPE_SOCKET;
 }
 
+// CT_Socket 指定了所有操作Socket连接的函数
+// CT_Socket 结构体中的属性以"."开头，这是C99标准定义的结构体初始化方法，在声明属性的同时初始化属性
 ConnectionType CT_Socket = {
-    .ae_handler = connSocketEventHandler,
+    .ae_handler = connSocketEventHandler, // 该函数是一个分发函数，将根据事件类型，调用真正的回调函数(read_handler, write_handler)执行处理逻辑
     .close = connSocketClose,
     .write = connSocketWrite,
     .read = connSocketRead,
     .accept = connSocketAccept,
     .connect = connSocketConnect,
-    .set_write_handler = connSocketSetWriteHandler,
-    .set_read_handler = connSocketSetReadHandler,
+    .set_write_handler = connSocketSetWriteHandler, // 为连接注册write事件回调函数。 connSocketSetWriteHandler会将 ae_handler 注册为回调函数
+    .set_read_handler = connSocketSetReadHandler, // 为连接注册read事件回调函数。connSocketSetReadHandler会将 ae_handler 注册为回调函数
     .get_last_error = connSocketGetLastError,
     .blocking_connect = connSocketBlockingConnect,
     .sync_write = connSocketSyncWrite,

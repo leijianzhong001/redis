@@ -51,10 +51,13 @@ int checkBlockedClientTimeout(client *c, mstime_t now) {
 /* Check for timeouts. Returns non-zero if the client was terminated.
  * The function gets the current time in milliseconds as argument since
  * it gets called multiple times in a loop, so calling gettimeofday() for
- * each iteration would be costly without any actual gain. */
+ * each iteration would be costly without any actual gain.
+ * clientsCronHandleTimeout 函数会关闭超过 server.maxidletime 指定时间内没有发送命令的客户端
+ * */
 int clientsCronHandleTimeout(client *c, mstime_t now_ms) {
     time_t now = now_ms/1000;
 
+    // 如果客户端超过改配置指定的时间未发送请求，那么服务器将断开连接
     if (server.maxidletime &&
         /* This handles the idle clients connection timeout if set. */
         !(c->flags & CLIENT_SLAVE) &&   /* No timeout for slaves and monitors */

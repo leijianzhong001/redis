@@ -124,18 +124,18 @@ client *createClient(connection *conn) {
      * This is useful since all the commands needs to be executed
      * in the context of a client. When commands are executed in other
      * contexts (for instance a Lua script) we need a non connected client. */
-    // 【1】如果conn为null， 则创建伪客户端。 伪客户端很有用，因为Redis的所有命令都必须在client上下文中执行，当命令在其他上下文环境中执行时（如lua脚本），就需要创建一个伪客户端
+    // 【1】如果conn为null， 则创建伪客户端。
+    // 伪客户端很有用，因为Redis的所有命令都必须在client上下文中执行，当命令在其他上下文环境中执行时（如lua脚本），就需要创建一个伪客户端
     if (conn) {
         // 将文件描述符设置位非阻塞模式
         connNonBlock(conn);
-        // connEnableTcpNoDelay 函数关闭tco Delay选项
+        // connEnableTcpNoDelay 函数关闭tcp Delay选项
         connEnableTcpNoDelay(conn);
         if (server.tcpkeepalive)
-            // connKeepAlive 函数开启tco的keepAlive选项，服务器定时向空闲客户端发送ack进行探测
+            // connKeepAlive 函数开启tcp的keepAlive选项，服务器定时向空闲客户端发送ack进行探测
             connKeepAlive(conn,server.tcpkeepalive);
-        // connSetReadHandler 为数据套接字注册AE_READABLE文件事件处理函数 readQueryFromClient 。 connSetReadHandler 函数中会调用 conn.type->set_read_handler函数给连接注册回调函数
-        // 当连接的readable事件就绪之后，将触发 readQueryFromClient 函数
-        // readQueryFromClient 函数负责读取客户端发送的请求数据
+        // connSetReadHandler 为数据套接字注册AE_READABLE文件事件处理函数 readQueryFromClient 。 connSetReadHandler 函数中会调用 conn.type->set_read_handler 函数给连接注册回调函数
+        // 当连接的readable事件就绪之后，将触发 readQueryFromClient 函数, readQueryFromClient 函数负责读取客户端发送的请求数据
         connSetReadHandler(conn, readQueryFromClient);
         // connSetPrivateData 函数负责将客户端对象c赋给conn.private_data属性
         connSetPrivateData(conn, c);
@@ -1204,8 +1204,9 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 
     // 【1】 每次事件循环最多接收 1000 个客户端请求，防止短时间内处理过多客户请求导致工作线程阻塞
     while(max--) {
-        // 【2】 anetTcpAccept函数会调用C语言的accept函数接收新的客户端连接，并返回数据套接字文件描述符。
-        // 如果当前没有待处理的连接请求，则该函数返回 ANET_ERR, 这时会退出函数。如果有新的请求进来时，Redis事件循环器会重新调用 acceptTcpHandler 函数
+        // 【2】 anetTcpAccept 函数会调用C语言的accept函数接收新的客户端连接，并返回数据套接字文件描述符。
+        // 如果当前没有待处理的连接请求，则该函数返回 ANET_ERR, 这时会退出函数。
+        // 如果有新的请求进来时，Redis事件循环器会重新调用 acceptTcpHandler 函数(当监听套接字上有新的连接进来时，会触发epoll的EPOLLIN事件，Redis会将其转化伪AE_READABLE事件，之后将事件保存到eventloop.fired中，之后触发注册回调函数 acceptTcpHandler)
         cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
         if (cfd == ANET_ERR) {
             if (errno != EWOULDBLOCK)
@@ -1216,6 +1217,7 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         anetCloexec(cfd);
         serverLog(LL_VERBOSE,"Accepted %s:%d", cip, cport);
         // connCreateAcceptedSocket 创建并返回 connection 结构体。
+        // acceptCommonHandler 用于执行创建连接之后的逻辑， 如创建client结构体， 为数据套接字注册文件事件回调函数
         acceptCommonHandler(connCreateAcceptedSocket(cfd),0,cip);
     }
 }
@@ -1385,13 +1387,17 @@ void freeClient(client *c) {
     listNode *ln;
 
     /* If a client is protected, yet we need to free it right now, make sure
-     * to at least use asynchronous freeing. */
+     * to at least use asynchronous freeing.
+     * 如果一个客户端是受保护的，但是我们现在需要释放它，那么确保至少使用异步释放。
+     * */
     if (c->flags & CLIENT_PROTECTED) {
         freeClientAsync(c);
         return;
     }
 
-    /* For connected clients, call the disconnection event of modules hooks. */
+    /* For connected clients, call the disconnection event of modules hooks.
+     * 对于已连接的客户端，调用module钩子的断开事件
+     * */
     if (c->conn) {
         moduleFireServerEvent(REDISMODULE_EVENT_CLIENT_CHANGE,
                               REDISMODULE_SUBEVENT_CLIENT_CHANGE_DISCONNECTED,
@@ -1404,7 +1410,10 @@ void freeClient(client *c) {
     /* If this client was scheduled for async freeing we need to remove it
      * from the queue. Note that we need to do this here, because later
      * we may call replicationCacheMaster() and the client should already
-     * be removed from the list of clients to free. */
+     * be removed from the list of clients to free.
+     *
+     * 如果这个客户端被安排为异步释放，我们需要从队列中删除它。注意，我们需要在这里这样做，因为稍后我们可能会调用replicationCacheMaster()，并且客户端应该已经从客户端列表中删除以释放。
+     * */
     if (c->flags & CLIENT_CLOSE_ASAP) {
         ln = listSearchKey(server.clients_to_close,c);
         serverAssert(ln != NULL);
@@ -1438,7 +1447,9 @@ void freeClient(client *c) {
     sdsfree(c->pending_querybuf);
     c->querybuf = NULL;
 
-    /* Deallocate structures used to block on blocking ops. */
+    /* Deallocate structures used to block on blocking ops.
+     * 释放用于阻塞操作的阻塞结构。
+     * */
     if (c->flags & CLIENT_BLOCKED) unblockClient(c);
     dictRelease(c->bpop.keys);
 
@@ -1466,7 +1477,7 @@ void freeClient(client *c) {
     // 关闭socket连接
     unlinkClient(c);
 
-    // 如果客户端是从节点客户端，则将其从server.monitors 或 server.slaves中剔除，并减少 server.repl_good_slaves_count 计数
+    // 如果客户端是从节点客户端，则将其从 server.monitors 或 server.slaves 中剔除，并减少 server.repl_good_slaves_count 计数
     /* Master/slave cleanup Case 1:
      * we lost the connection with a slave. */
     if (c->flags & CLIENT_SLAVE) {
@@ -1476,7 +1487,10 @@ void freeClient(client *c) {
          * child process asap to dump rdb for next full synchronization or bgsave.
          * But we also need to check if users enable 'save' RDB, if enable, we
          * should not remove directly since that means RDB is important for users
-         * to keep data safe and we may delay configured 'save' for full sync. */
+         * to keep data safe and we may delay configured 'save' for full sync.
+         * 如果没有其他slave进程等待转储RDB完成，而当前子进程不需要继续转储RDB，那么我们杀死它。所以子进程不会使用更多的内存，我们也可以尽快派生一个新的子进程来转储rdb，以便下一次完全同步或bgsave。
+         * 但我们还需要检查用户是否启用了“save” RDB，如果启用，我们不应该直接删除，因为这意味着RDB对用户保持数据安全很重要，我们可能会延迟配置的“save”以实现完全同步。
+         * */
         if (server.saveparamslen == 0 &&
             c->replstate == SLAVE_STATE_WAIT_BGSAVE_END &&
             server.child_type == CHILD_TYPE_RDB &&
@@ -1492,10 +1506,12 @@ void freeClient(client *c) {
         list *l = (c->flags & CLIENT_MONITOR) ? server.monitors : server.slaves;
         ln = listSearchKey(l,c);
         serverAssert(ln != NULL);
-        listDelNode(l,ln);
+        listDelNode(l,ln); // 从 server.monitors 或 server.slaves 中删除这个客户端
         /* We need to remember the time when we started to have zero
          * attached slaves, as after some time we'll free the replication
-         * backlog. */
+         * backlog.
+         * 我们需要记住我们开始删除slave的时间，因为一段时间后我们将释放复制积压。
+         * */
         if (getClientType(c) == CLIENT_TYPE_SLAVE && listLength(server.slaves) == 0)
             server.repl_no_slaves_since = server.unixtime;
         refreshGoodSlavesCount();
@@ -1507,16 +1523,22 @@ void freeClient(client *c) {
     }
 
     /* Master/slave cleanup Case 2:
-     * we lost the connection with the master. */
+     * we lost the connection with the master.
+     * 失去与master客户端的连接时， 尝试再次连接主客户端
+     * */
     if (c->flags & CLIENT_MASTER) replicationHandleMasterDisconnection();
 
    /* Remove the contribution that this client gave to our
-     * incrementally computed memory usage. */
+     * incrementally computed memory usage.
+     * 删除该客户端对增量计算内存使用的贡献。
+     * */
     server.stat_clients_type_memory[c->client_cron_last_memory_type] -=
         c->client_cron_last_memory_usage;
 
     /* Release other dynamically allocated client structure fields,
-     * and finally release the client structure itself. */
+     * and finally release the client structure itself.
+     * 释放其他动态分配的客户端结构字段，最后释放客户端结构本身
+     * */
     if (c->name) decrRefCount(c->name);
     zfree(c->argv);
     c->argv_len_sum = 0;
@@ -1530,7 +1552,10 @@ void freeClient(client *c) {
 /* Schedule a client to free it at a safe time in the serverCron() function.
  * This function is useful when we need to terminate a client but we are in
  * a context where calling freeClient() is not possible, because the client
- * should be valid for the continuation of the flow of the program. */
+ * should be valid for the continuation of the flow of the program.
+ * 在serverCron()函数中安排client在安全时间释放。当我们需要终止一个客户端，但我们在一个不可能调用freeClient()的上下文中，这个函数是有用的，因为客户端应该对程序流的继续有效。
+ * 当客户端发送quit命令，或者socket连接断开，服务器会调用 freeClientAsync 函数将客户端添加到 server.clients_to_close ，以便后续关闭客户端。
+ * */
 void freeClientAsync(client *c) {
     /* We need to handle concurrent access to the server.clients_to_close list
      * only in the freeClientAsync() function, since it's the only function that
@@ -1544,6 +1569,7 @@ void freeClientAsync(client *c) {
         listAddNodeTail(server.clients_to_close,c);
         return;
     }
+    // 如果io线程有多个，则先加锁，再将客户端添加到 server.clients_to_close 中
     static pthread_mutex_t async_free_queue_mutex = PTHREAD_MUTEX_INITIALIZER;
     pthread_mutex_lock(&async_free_queue_mutex);
     listAddNodeTail(server.clients_to_close,c);
@@ -1551,7 +1577,12 @@ void freeClientAsync(client *c) {
 }
 
 /* Free the clients marked as CLOSE_ASAP, return the number of clients
- * freed. */
+ * freed.
+ * 释放标记为CLOSE_ASAP的客户端，返回释放的客户端数量。
+ *
+ * freeClientsInAsyncFreeQueue 函数会在serverCron的beforeSleep函数中被调用。
+ * 该函数会遍历 server.clients_to_close 链表， 调用freeClient函数释放客户端
+ * */
 int freeClientsInAsyncFreeQueue(void) {
     int freed = 0;
     listIter li;
@@ -1561,8 +1592,10 @@ int freeClientsInAsyncFreeQueue(void) {
     while ((ln = listNext(&li)) != NULL) {
         client *c = listNodeValue(ln);
 
+        // 如果当前客户端有保护标记，则不能释放
         if (c->flags & CLIENT_PROTECTED) continue;
 
+        // 去除当前客户端的 CLIENT_CLOSE_ASAP 标记
         c->flags &= ~CLIENT_CLOSE_ASAP;
         freeClient(c);
         listDelNode(server.clients_to_close,ln);
@@ -2274,7 +2307,7 @@ void processInputBuffer(client *c) {
     }
 }
 
-// readQueryFromClient 负责读取请求数据
+// readQueryFromClient 是注册在数据套接字上的回到函数，负责读取请求数据
 void readQueryFromClient(connection *conn) {
     // 【1】 从conn中读取client
     client *c = connGetPrivateData(conn);
@@ -2284,7 +2317,7 @@ void readQueryFromClient(connection *conn) {
     /* Check if we want to read from the client later when exiting from
      * the event loop. This is the case if threaded I/O is enabled. */
     // 【2】 如果开启了IO线程(redis 6以后的io多线程)，则交给IO线程读取并解析请求数据，该函数直接返回
-    // postpone 函数会将当前客户端添加到server.clients_pending_read中，等待io线程处理
+    // postpone 函数会将当前客户端打上 CLIENT_PENDING_READ 标记， 并添加到 server.clients_pending_read 中，等待io线程处理
     if (postponeClientRead(c)) return;
 
     /* Update total number of reads on server */
@@ -2341,9 +2374,10 @@ void readQueryFromClient(connection *conn) {
 
     sdsIncrLen(c->querybuf,nread);
     c->lastinteraction = server.unixtime;
-    // 【6】 如果客户端是主节点客户端，那么更新client.read_reploff, 该变量用于主从同步机制
+    // 【6】 如果客户端是主节点客户端，那么更新 client.read_reploff, 该变量用于主从同步机制
     if (c->flags & CLIENT_MASTER) c->read_reploff += nread;
     atomicIncr(server.stat_net_input_bytes, nread);
+    // 注意这里，如果客户端的查询缓冲区大于指定的 client-query-buffer-limit 大小(默认1G)，则直接释放客户端并报错
     if (sdslen(c->querybuf) > server.client_max_querybuf_len) {
         sds ci = catClientInfoString(sdsempty(),c), bytes = sdsempty();
 
@@ -3814,7 +3848,9 @@ int handleClientsWithPendingWritesUsingThreads(void) {
 /* Return 1 if we want to handle the client read later using threaded I/O.
  * This is called by the readable handler of the event loop.
  * As a side effect of calling this function the client is put in the
- * pending read clients and flagged as such. */
+ * pending read clients and flagged as such.
+ * 如果我们希望稍后使用 I/O 线程处理客户端读取，则返回1。这由事件循环的可读处理程序调用。作为调用这个函数的副作用，客户端被放在挂起的读客户端中，并被标记为这样。
+ * */
 int postponeClientRead(client *c) {
     if (server.io_threads_active &&
         server.io_threads_do_reads &&

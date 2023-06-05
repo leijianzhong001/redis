@@ -1673,37 +1673,60 @@ long long getInstantaneousMetric(int metric) {
 /* The client query buffer is an sds.c string that can end with a lot of
  * free space not used, this function reclaims space if needed.
  *
- * The function always returns 0 as it never terminates the client. */
+ * The function always returns 0 as it never terminates the client.
+ * 客户端查询缓冲区是一个sds.c字符串，可以以大量未使用的空闲空间结束，如果需要，这个函数会回收空间。
+ *
+ * 该函数总是返回0，因为它永远不会终止客户端。
+ * */
 int clientsCronResizeQueryBuffer(client *c) {
+    // 查询缓冲区当前大小，包括未使用的空闲空间
     size_t querybuf_size = sdsAllocSize(c->querybuf);
+    // 最后一次和该客户端交互到现在的时间
     time_t idletime = server.unixtime - c->lastinteraction;
 
     /* There are two conditions to resize the query buffer:
      * 1) Query buffer is > BIG_ARG and too big for latest peak.
-     * 2) Query buffer is > BIG_ARG and client is idle. */
+     * 2) Query buffer is > BIG_ARG and client is idle.
+     * 收缩查询缓冲区需要满足如下条件：
+     *      1) 查询缓冲区总大小大于 PROTO_MBULK_BIG_ARG(32KB)
+     *      2) 查询缓冲区总空间大于单次读取数据量峰值的两倍,或者客户端当前处于空闲状态2s以上
+     *      3) 查询缓冲区空闲空间大于4KB
+     * */
     if (querybuf_size > PROTO_MBULK_BIG_ARG &&
          ((querybuf_size/(c->querybuf_peak+1)) > 2 ||
           idletime > 2))
     {
         /* Only resize the query buffer if it is actually wasting
-         * at least a few kbytes. */
+         * at least a few kbytes.
+         * 只有在实际浪费至少4kb时才调整查询缓冲区的大小。
+         * */
         if (sdsavail(c->querybuf) > 1024*4) {
             c->querybuf = sdsRemoveFreeSpace(c->querybuf);
         }
     }
     /* Reset the peak again to capture the peak memory usage in the next
-     * cycle. */
+     * cycle.
+     * 再次重置峰值以捕获下一个周期中的峰值内存使用情况。
+     * */
     c->querybuf_peak = 0;
 
     /* Clients representing masters also use a "pending query buffer" that
      * is the yet not applied part of the stream we are reading. Such buffer
      * also needs resizing from time to time, otherwise after a very large
      * transfer (a huge value or a big MIGRATE operation) it will keep using
-     * a lot of memory. */
+     * a lot of memory.
+     *
+     * 代表主服务器的客户端也使用“pending query buffer”，这是我们正在读取的流中尚未应用的部分。
+     * 这样的缓冲区也需要不时地调整大小，否则在非常大的传输(巨大的值或大的MIGRATE操作)之后，它将继续使用大量内存。
+     * */
     if (c->flags & CLIENT_MASTER) {
         /* There are two conditions to resize the pending query buffer:
          * 1) Pending Query buffer is > LIMIT_PENDING_QUERYBUF.
-         * 2) Used length is smaller than pending_querybuf_size/2 */
+         * 2) Used length is smaller than pending_querybuf_size/2
+         * 有两个条件可以调整pending query buffer的大小:
+         *      1) Pending Query buffer > LIMIT_PENDING_QUERYBUF(4mb)
+         *      2) 使用长度小于 pending_querybuf_size/2
+         * */
         size_t pending_querybuf_size = sdsAllocSize(c->pending_querybuf);
         if(pending_querybuf_size > LIMIT_PENDING_QUERYBUF &&
            sdslen(c->pending_querybuf) < (pending_querybuf_size/2))
@@ -1799,13 +1822,16 @@ void clientsCron(void) {
      * per call. Since normally (if there are no big latency events) this
      * function is called server.hz times per second, in the average case we
      * process all the clients in 1 second. */
+    // 【1】每次处理numclients(客户端数据量)/server.hz个客户端，由于该函数每秒调用server.hz次，所以结果就是每秒都会把所有客户端处理一遍
     int numclients = listLength(server.clients);
     int iterations = numclients/server.hz;
     mstime_t now = mstime();
 
     /* Process at least a few clients while we are at it, even if we need
      * to process less than CLIENTS_CRON_MIN_ITERATIONS to meet our contract
-     * of processing each client once per second. */
+     * of processing each client once per second.
+     * 处理至少几个客户端，即使我们需要处理的 CLIENTS_CRON_MIN_ITERATIONS 少于每秒处理一次每个客户端的约定。
+     * */
     if (iterations < CLIENTS_CRON_MIN_ITERATIONS)
         iterations = (numclients < CLIENTS_CRON_MIN_ITERATIONS) ?
                      numclients : CLIENTS_CRON_MIN_ITERATIONS;
@@ -1834,17 +1860,26 @@ void clientsCron(void) {
 
         /* Rotate the list, take the current head, process.
          * This way if the client must be removed from the list it's the
-         * first element and we don't incur into O(N) computation. */
+         * first element and we don't incur into O(N) computation.
+         * 旋转列表，取当前头，处理。这样，如果客户端必须从列表中删除，它是第一个元素，我们不会产生O(N)计算。
+         * */
         listRotateTailToHead(server.clients);
         head = listFirst(server.clients);
         c = listNodeValue(head);
         /* The following functions do different service checks on the client.
          * The protocol is that they return non-zero if the client was
-         * terminated. */
+         * terminated.
+         * 以下函数在客户机上执行不同的服务检查。协议规定，如果客户端被终止，它们返回非零。
+         * */
+        // 【2】clientsCronHandleTimeout 函数会关闭超过 server.maxidletime 指定时间内没有发送命令的客户端
         if (clientsCronHandleTimeout(c,now)) continue;
+        // 【3】clientsCronResizeQueryBuffer 函数收缩客户端查询缓冲区以节省内存。
         if (clientsCronResizeQueryBuffer(c)) continue;
+        // 【4】clientsCronTrackExpansiveClients 函数跟踪最近几秒内使用内存量最大的客户端，以便在INFO命令中提供此类信息
         if (clientsCronTrackExpansiveClients(c, curr_peak_mem_usage_slot)) continue;
+        // 【5】clientsCronTrackClientsMemUsage 函数统计增加的内存使用量，以便在INFO命令中提供此类信息
         if (clientsCronTrackClientsMemUsage(c)) continue;
+        // 【6】closeClientOnOutputBufferLimitReached 函数在客户端输出缓冲区超出限制时，关闭该客户端
         if (closeClientOnOutputBufferLimitReached(c, 0)) continue;
     }
 }
@@ -2135,7 +2170,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         }
     }
 
-    /* We need to do a few operations on clients asynchronously. */
+    /* We need to do a few operations on clients asynchronously.
+     * 关闭超时未发送命令的客户端
+     * */
     clientsCron();
 
     /* Handle background operations on Redis databases. */
@@ -6558,8 +6595,8 @@ int main(int argc, char **argv) {
         }
     } else {
         ACLLoadUsersAtStartup();
-        //【14】 如果以Sentinel模式启动，则调用sentinelIsRunning函数启动sentinel相关机制
         InitServerLast();
+        //【14】 如果以Sentinel模式启动，则调用sentinelIsRunning函数启动sentinel相关机制
         sentinelIsRunning();
         if (server.supervised_mode == SUPERVISED_SYSTEMD) {
             // 如果是以systemd的方式启动,发送服务就绪消息

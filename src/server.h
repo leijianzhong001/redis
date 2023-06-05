@@ -157,6 +157,7 @@ typedef long long ustime_t; /* microsecond time type. */
  * of file descriptors we can handle are server.maxclients + RESERVED_FDS +
  * a few more to stay safe. Since RESERVED_FDS defaults to 32, we add 96
  * in order to make sure of not over provisioning more than 128 fds.
+ *
  * 在配置服务器eventloop时，我们设置它，以便我们可以处理的文件描述符的总数是服务器 maxclients + RESERVED_FDS + 几个以保持安全。
  * 由于 RESERVED_FDS 默认为32，因此我们添加96以确保不会过度配置超过128个fds。
  * */
@@ -227,29 +228,29 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define AOF_WAIT_REWRITE 2    /* AOF waits rewrite to start appending */
 
 /* 客户端标记 Client flags */
-#define CLIENT_SLAVE (1<<0)   /* This client is a replica */
-#define CLIENT_MASTER (1<<1)  /* This client is a master */
-#define CLIENT_MONITOR (1<<2) /* This client is a slave monitor, see MONITOR */
-#define CLIENT_MULTI (1<<3)   /* This client is in a MULTI context */
-#define CLIENT_BLOCKED (1<<4) /* The client is waiting in a blocking operation */
+#define CLIENT_SLAVE (1<<0)   /* This client is a replica                      客户端是从节点客户端（说明当前服务节点是主节点）*/
+#define CLIENT_MASTER (1<<1)  /* This client is a master                       客户端是主节点客户端（说明当前服务节点是从节点） */
+#define CLIENT_MONITOR (1<<2) /* This client is a slave monitor, see MONITOR   客户端是一个monitor客户端 */
+#define CLIENT_MULTI (1<<3)   /* This client is in a MULTI context             该客户端正在执行事务 */
+#define CLIENT_BLOCKED (1<<4) /* The client is waiting in a blocking operation 客户端正在被BRPOP, BLPOP等命令阻塞 */
 #define CLIENT_DIRTY_CAS (1<<5) /* Watched keys modified. EXEC will fail. */
-#define CLIENT_CLOSE_AFTER_REPLY (1<<6) /* Close after writing entire reply. */
+#define CLIENT_CLOSE_AFTER_REPLY (1<<6) /* Close after writing entire reply.   不再执行新命令， 发送完恢复缓冲区中的内容以后立即【关闭客户端】，出现该标志通常由于用户对该客户端执行了client kill命令，或者客户端请求数据包含了错误的协议内容 */
 #define CLIENT_UNBLOCKED (1<<7) /* This client was unblocked and is stored in
                                   server.unblocked_clients */
-#define CLIENT_LUA (1<<8) /* This is a non connected client used by Lua */
+#define CLIENT_LUA (1<<8) /* This is a non connected client used by Lua        该客户端是在lua脚本中执行Redis命令的伪客户端，在lua脚本中通过redis.call等函数调用redis命令，redis将创建一个伪客户端执行命令 */
 #define CLIENT_ASKING (1<<9)     /* Client issued the ASKING command */
-#define CLIENT_CLOSE_ASAP (1<<10)/* Close this client ASAP */
+#define CLIENT_CLOSE_ASAP (1<<10)/* Close this client ASAP                     该客户端正在关闭 */
 #define CLIENT_UNIX_SOCKET (1<<11) /* Client connected via Unix domain socket */
 #define CLIENT_DIRTY_EXEC (1<<12)  /* EXEC will fail for errors while queueing */
 #define CLIENT_MASTER_FORCE_REPLY (1<<13)  /* Queue replies even if is master */
-#define CLIENT_FORCE_AOF (1<<14)   /* Force AOF propagation of current cmd. */
-#define CLIENT_FORCE_REPL (1<<15)  /* Force replication of current cmd. */
+#define CLIENT_FORCE_AOF (1<<14)   /* Force AOF propagation of current cmd.    强制将执行的命令写入aof文件， 即使命令并没有变更数据 */
+#define CLIENT_FORCE_REPL (1<<15)  /* Force replication of current cmd.        强制将执行的命令复制给所有从节点，即使命令并没有变更数据 */
 #define CLIENT_PRE_PSYNC (1<<16)   /* Instance don't understand PSYNC. */
 #define CLIENT_READONLY (1<<17)    /* Cluster client is in read-only state. */
 #define CLIENT_PUBSUB (1<<18)      /* Client is in Pub/Sub mode. */
-#define CLIENT_PREVENT_AOF_PROP (1<<19)  /* Don't propagate to AOF. */
-#define CLIENT_PREVENT_REPL_PROP (1<<20)  /* Don't propagate to slaves. */
-#define CLIENT_PREVENT_PROP (CLIENT_PREVENT_AOF_PROP|CLIENT_PREVENT_REPL_PROP)
+#define CLIENT_PREVENT_AOF_PROP (1<<19)  /* Don't propagate to AOF.            禁止将当前执行的命令写入aof文件，即使命令已变更数据 */
+#define CLIENT_PREVENT_REPL_PROP (1<<20)  /* Don't propagate to slaves.        禁止将当前执行的命令传播给从节点，即使命令已变更数据 */
+#define CLIENT_PREVENT_PROP (CLIENT_PREVENT_AOF_PROP|CLIENT_PREVENT_REPL_PROP) /*  禁止将当前执行的命令写入aof文件以及传播给从节点，即使命令已变更数据 */
 #define CLIENT_PENDING_WRITE (1<<21) /* Client has output to send but a write
                                         handler is yet not installed. */
 #define CLIENT_REPLY_OFF (1<<22)   /* Don't send replies to client. */
@@ -261,9 +262,9 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_PROTECTED (1<<28) /* Client should not be freed for now. */
 #define CLIENT_PENDING_READ (1<<29) /* The client has pending reads and was put
                                        in the list of clients we can read
-                                       from. */
+                                       from.                                   客户端请求数据已被交给I/O线程处理 */
 #define CLIENT_PENDING_COMMAND (1<<30) /* Indicates the client has a fully
-                                        * parsed command ready for execution. */
+                                        * parsed command ready for execution.  IO线程已处理完客户端请求数据，主进程可以执行命令 */
 #define CLIENT_TRACKING (1ULL<<31) /* Client enabled keys tracking in order to
                                    perform client side caching. */
 #define CLIENT_TRACKING_BROKEN_REDIR (1ULL<<32) /* Target client is invalid. */
@@ -271,13 +272,13 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_TRACKING_OPTIN (1ULL<<34)  /* Tracking in opt-in mode. */
 #define CLIENT_TRACKING_OPTOUT (1ULL<<35) /* Tracking in opt-out mode. */
 #define CLIENT_TRACKING_CACHING (1ULL<<36) /* CACHING yes/no was given,
-                                              depending on optin/optout mode. */
+                                              depending on optin/optout mode.  客户端开启了客户端缓存功能 */
 #define CLIENT_TRACKING_NOLOOP (1ULL<<37) /* Don't send invalidation messages
                                              about writes performed by myself.*/
 #define CLIENT_IN_TO_TABLE (1ULL<<38) /* This client is in the timeout table. */
 #define CLIENT_PROTOCOL_ERROR (1ULL<<39) /* Protocol error chatting with it. */
 #define CLIENT_CLOSE_AFTER_COMMAND (1ULL<<40) /* Close after executing commands
-                                               * and writing entire reply. */
+                                               * and writing entire reply.     执行完当前命令并回复内容后立即关闭客户端，通常在acl中删除某个用户后， Redis会对该用户相关客户端打开这个标记 */
 #define CLIENT_DENY_BLOCKING (1ULL<<41) /* Indicate that the client should not be blocked.
                                            currently, turned on inside MULTI, Lua, RM_Call,
                                            and AOF client */
@@ -443,8 +444,8 @@ typedef enum {
 
 /* Command call flags, see call() function */
 #define CMD_CALL_NONE 0
-#define CMD_CALL_SLOWLOG (1<<0)
-#define CMD_CALL_STATS (1<<1)
+#define CMD_CALL_SLOWLOG (1<<0) /*                                             记录慢查询 */
+#define CMD_CALL_STATS (1<<1) /*                                               统计命令执行信息 */
 #define CMD_CALL_PROPAGATE_AOF (1<<2)
 #define CMD_CALL_PROPAGATE_REPL (1<<3)
 #define CMD_CALL_PROPAGATE (CMD_CALL_PROPAGATE_AOF|CMD_CALL_PROPAGATE_REPL)
@@ -859,21 +860,22 @@ typedef struct {
                                       need more reserved IDs use UINT64_MAX-1,
                                       -2, ... and so forth. */
 
+// server.h/client结构体负责存储每个客户端的相关信息，连接创建成功后，redis将创建一个client结构体以维护客户端信息
 typedef struct client {
     uint64_t id;            /* Client incremental unique ID. */
     connection *conn;
     int resp;               /* RESP protocol version. Can be 2 or 3. */
     redisDb *db;            /* Pointer to currently SELECTed DB. */
     robj *name;             /* As set by CLIENT SETNAME. */
-    sds querybuf;           /* Buffer we use to accumulate client queries.  查询缓冲区，用于存放客户端请求数据*/
-    size_t qb_pos;          /* The position we have read in querybuf.  查询缓冲区的最新读取位置*/
+    sds querybuf;           /* Buffer we use to accumulate client queries.     查询缓冲区，用于存放客户端请求数据 */
+    size_t qb_pos;          /* The position we have read in querybuf.          查询缓冲区的最新读取位置 */
     sds pending_querybuf;   /* If this client is flagged as master, this buffer
                                represents the yet not applied portion of the
                                replication stream that we are receiving from
                                the master. */
-    size_t querybuf_peak;   /* Recent (100ms or more) peak of querybuf size.  客户端单次读取请求数据量的峰值*/
+    size_t querybuf_peak;   /* Recent (100ms or more) peak of querybuf size.   客户端单次读取请求数据量的峰值*/
     int argc;               /* Num of arguments of current command. */
-    robj **argv;            /* Arguments of current command. argv[0]是命令名，后面的都是命令参数*/
+    robj **argv;            /* Arguments of current command.                   argv[0]是命令名，后面的都是命令参数 */
     int original_argc;      /* Num of arguments of original command if arguments were rewritten. */
     robj **original_argv;   /* Arguments of original command if arguments were rewritten. */
     size_t argv_len_sum;    /* Sum of lengths of objects in argv list. */
@@ -881,11 +883,12 @@ typedef struct client {
     user *user;             /* User associated with this connection. If the
                                user is set to NULL the connection can do
                                anything (admin). */
-    int reqtype;            /* Request protocol type: PROTO_REQ_*  请求数据协议类型*/
-    int multibulklen;       /* Number of multi bulk arguments left to read.  当前解析的命令请求中尚未处理的命令参数数量*/
-    long bulklen;           /* Length of bulk argument in multi bulk request. 当前读取命令参数长度*/
-    list *reply;            /* List of reply objects to send to the client. 链表回复缓冲区（动态输出缓冲区）用于存放redis返回给用户的响应数据*/
-    unsigned long long reply_bytes; /* Tot bytes of objects in reply list. 链表回复缓冲区字节数*/
+    int reqtype;            /* Request protocol type: PROTO_REQ_*              请求数据协议类型 */
+    int multibulklen;       /* Number of multi bulk arguments left to read.    当前解析的命令请求中尚未处理的命令参数数量 */
+    long bulklen;           /* Length of bulk argument in multi bulk request.  当前读取命令参数长度 */
+    list *reply;            /* List of reply objects to send to the client.    链表回复缓冲区（动态输出缓冲区）用于存放redis返回给用户的响应数据
+                                                                               这个链表实际上是 clientReplyBlock 结构体链表。*/
+    unsigned long long reply_bytes; /* Tot bytes of objects in reply list.     链表回复缓冲区字节数 */
     list *deferred_reply_errors;    /* Used for module thread safe contexts. */
     size_t sentlen;         /* Amount of bytes already sent in the current
                                buffer or object being sent. */
@@ -893,7 +896,7 @@ typedef struct client {
     long duration;          /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     time_t lastinteraction; /* Time of the last interaction, used for timeout */
     time_t obuf_soft_limit_reached_time;
-    uint64_t flags;         /* Client flags: CLIENT_* macros. 客户端标志*/
+    uint64_t flags;         /* Client flags: CLIENT_* macros.                  客户端标志 */
     int authenticated;      /* Needed when the default user requires auth. */
     int replstate;          /* Replication state if this is a slave. */
     int repl_put_online_on_ack; /* Install slave write handler on first ACK. */
@@ -949,8 +952,8 @@ typedef struct client {
     uint64_t client_cron_last_memory_usage;
     int      client_cron_last_memory_type;
     /* Response buffer */
-    int bufpos; // 固定输出缓冲区的读取位置
-    char buf[PROTO_REPLY_CHUNK_BYTES]; // 固定输出缓冲区
+    int bufpos; /*                                                             固定输出缓冲区的读取位置. */
+    char buf[PROTO_REPLY_CHUNK_BYTES]; /*                                      固定输出缓冲区. */
 } client;
 
 struct saveparam {
@@ -1246,9 +1249,9 @@ struct redisServer {
     int protected_mode;         /* Don't accept external connections. */
     int gopher_enabled;         /* If true the server will reply to gopher
                                    queries. Will still serve RESP2 queries. */
-    int io_threads_num;         /* Number of IO threads to use. */
-    int io_threads_do_reads;    /* Read and parse from IO threads? */
-    int io_threads_active;      /* Is IO threads currently active? */
+    int io_threads_num;         /* Number of IO threads to use.                存储io-threads配置，默认是1， 即使用单线程 */
+    int io_threads_do_reads;    /* Read and parse from IO threads?             是否使用io线程读取和解析用户请求数据 */
+    int io_threads_active;      /* Is IO threads currently active?             IO线程当前是否为激活状态，默认为0. 当配置了io_threads_num并且开始读取和解析用户请求时，io线程将被激活 */
     long long events_processed_while_blocked; /* processEventsWhileBlocked() */
 
     /* RDB / AOF loading information */
@@ -1321,8 +1324,13 @@ struct redisServer {
     } inst_metric[STATS_METRIC_COUNT];
     /* Configuration */
     int verbosity;                  /* Loglevel in redis.conf */
-    int maxidletime;                /* Client timeout in seconds */
-    int tcpkeepalive;               /* Set SO_KEEPALIVE if non-zero. */
+    int maxidletime;                /* Client timeout in seconds               存储timeout配置，默认为0代表禁用。单位为秒，如果客户端超过改配置指定的时间未发送请求，那么服务器将断开连接 */
+    int tcpkeepalive;               /* Set SO_KEEPALIVE if non-zero.           默认为300， 单位为秒，如果不为0， 则配置以下TCP KeepAlive相关选项：
+                                                                                    SO_KEEPALIVE: 设置为1，代表开启tcp keepalive功能;
+                                                                                    TCP_KEEPIDLE: 等于 tcpkeepalive， 发送探测包的时间间隔
+                                                                                    TCP_KEEPINTVL: 等于 tcpkeepalive/3， 探测失败后重新发送探测包的时间间隔
+                                                                                    TCP_KEEPCNT: 固定为3，判断连接失败的探测失败册数
+                                                                               默认情况下，如果客户端一直没发送请求，则服务端会在300s后发送一个探测包，如果探测失败，则每隔100s再次发送一个探测包，连续三次探测失败就认为连接中断，将关闭客户端 */
     int active_expire_enabled;      /* Can be disabled for testing purposes. */
     int active_expire_effort;       /* From 1 (default) to 10, active effort. */
     int active_defrag_enabled;
@@ -1335,7 +1343,7 @@ struct redisServer {
     int active_defrag_cycle_min;       /* minimal effort for defrag in CPU percentage */
     int active_defrag_cycle_max;       /* maximal effort for defrag in CPU percentage */
     unsigned long active_defrag_max_scan_fields; /* maximum number of fields of set/hash/zset/list to process from within the main dict scan */
-    size_t client_max_querybuf_len; /* Limit for client query buffer length */
+    size_t client_max_querybuf_len; /* Limit for client query buffer length    存储 client-query-buffer-limit 配置，默认1G, 如果客户端查询缓冲区大于该值，则报错并关闭客户端 */
     int dbnum;                      /* Total number of configured DBs */
     int supervised;                 /* 1 if supervised, 0 otherwise. */
     int supervised_mode;            /* See SUPERVISED_* */
@@ -1497,14 +1505,14 @@ struct redisServer {
     list *clients_waiting_acks;         /* Clients waiting in WAIT command. */
     int get_ack_from_slaves;            /* If true we send REPLCONF GETACK. */
     /* Limits */
-    unsigned int maxclients;            /* Max number of simultaneous clients */
+    unsigned int maxclients;            /* Max number of simultaneous clients  存储maxclients配置，默认10000， 如果客户端连接数量（包括cluster连接）超过该值， 那么服务器将拒绝新的客户端连接*/
     unsigned long long maxmemory;   /* Max number of memory bytes to use */
     int maxmemory_policy;           /* Policy for key eviction */
     int maxmemory_samples;          /* Precision of random sampling */
     int maxmemory_eviction_tenacity;/* Aggressiveness of eviction processing */
     int lfu_log_factor;             /* LFU logarithmic counter factor. */
     int lfu_decay_time;             /* LFU counter decay factor. */
-    long long proto_max_bulk_len;   /* Protocol bulk length maximum size. */
+    long long proto_max_bulk_len;   /* Protocol bulk length maximum size.      存储 proto-max-bulk-len 配置， 默认512MB, 如果某个命令长度超过该值将报错 */
     int oom_score_adj_base;         /* Base oom_score_adj value, as observed on startup */
     int oom_score_adj_values[CONFIG_OOM_COUNT];   /* Linux oom_score_adj configuration */
     int oom_score_adj;                            /* If true, oom_score_adj is managed */

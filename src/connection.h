@@ -72,17 +72,18 @@ typedef struct ConnectionType {
 } ConnectionType;
 
 // connection结构体负责存储每个连接的相关信息
+// redis在收到连接请求的时候， 会调用 connCreateAcceptedSocket 函数为网络连接创建一个 connection ， 这些 connection 的 type 属性都指向 CT_Socket。 CT_Socket 指定了所有操作Socket连接的函数
 struct connection {
     ConnectionType *type; // ConnectionType 结构体包含操作连接通道的函数，如connect、read、write 。 redis将与连接相关的逻辑都封装到 connection 中， ConnectionType 是操作连接的API. redis通过ConnectionType提供的函数操作连接，而不是直接操作连接
     ConnectionState state; // ConnectionState 结构体定义连接的状态，包括 CONN_STATE_CONNECTING、CONN_STATE_ACCEPTING、CONN_STATE_CONNECTED、CONN_STATE_CLOSED、CONN_STATE_ERROR
     short int flags;
     short int refs;
-    int last_errno;
-    void *private_data; // 用于存放附加数据，如client
+    int last_errno; // 该连接最新的 errno
+    void *private_data; // 用于存放附加数据，如 client
     ConnectionCallbackFunc conn_handler; // 执行连接操作的回调函数
     ConnectionCallbackFunc write_handler; // 执行写入操作的回调函数
     ConnectionCallbackFunc read_handler; // 执行读取操作的回调函数
-    int fd;
+    int fd; // 数据套接字文件描述符
 };
 
 /* The connection module does not deal with listening and accepting sockets,

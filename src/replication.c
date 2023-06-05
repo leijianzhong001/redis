@@ -2733,7 +2733,9 @@ void replicationUnsetMaster(void) {
 }
 
 /* This function is called when the slave lose the connection with the
- * master into an unexpected way. */
+ * master into an unexpected way.
+ * 当从服务器以意外的方式失去与主服务器的连接时，调用此函数。
+ * */
 void replicationHandleMasterDisconnection(void) {
     /* Fire the master link modules event. */
     if (server.repl_state == REPL_STATE_CONNECTED)
@@ -2741,12 +2743,15 @@ void replicationHandleMasterDisconnection(void) {
                               REDISMODULE_SUBEVENT_MASTER_LINK_DOWN,
                               NULL);
 
-    server.master = NULL;
-    server.repl_state = REPL_STATE_CONNECT;
+    server.master = NULL; // 置空master客户端
+    server.repl_state = REPL_STATE_CONNECT; // 设置状态为 必须连接到主节点
     server.repl_down_since = server.unixtime;
     /* We lost connection with our master, don't disconnect slaves yet,
      * maybe we'll be able to PSYNC with our master later. We'll disconnect
-     * the slaves only if we'll have to do a full resync with our master. */
+     * the slaves only if we'll have to do a full resync with our master.
+     *
+     * 我们与主服务器失去了连接，暂时不要断开从服务器，也许以后我们可以与主服务器同步。只有当我们必须与主服务器完全同步时，我们才会断开从服务器的连接。
+     * */
 
     /* Try to re-connect immediately rather than wait for replicationCron
      * waiting 1 second may risk backlog being recycled. */
