@@ -113,9 +113,9 @@ void sendChildInfoGeneric(childInfoType info_type, size_t keys, double progress,
 /* Update Child info. */
 void updateChildInfo(childInfoType information_type, size_t cow, monotime cow_updated, size_t keys, double progress) {
     if (information_type == CHILD_INFO_TYPE_CURRENT_INFO) {
-        server.stat_current_cow_bytes = cow;
-        server.stat_current_cow_updated = cow_updated;
-        server.stat_current_save_keys_processed = keys;
+        server.stat_current_cow_bytes = cow; // 在子进程活跃期间写时复制占用的字节数
+        server.stat_current_cow_updated = cow_updated; // stat_current_cow_bytes 最近更新时间
+        server.stat_current_save_keys_processed = keys; // 子进程处于活动状态时已写入的键数量
         if (progress != -1) server.stat_module_progress = progress;
     } else if (information_type == CHILD_INFO_TYPE_AOF_COW_SIZE) {
         server.stat_aof_cow_bytes = cow;
@@ -129,7 +129,10 @@ void updateChildInfo(childInfoType information_type, size_t cow, monotime cow_up
 /* Read child info data from the pipe.
  * if complete data read into the buffer, 
  * data is stored into *buffer, and returns 1.
- * otherwise, the partial data is left in the buffer, waiting for the next read, and returns 0. */
+ * otherwise, the partial data is left in the buffer, waiting for the next read, and returns 0.
+ *
+ * 从管道中读取子信息数据。如果将完整的数据读入缓冲区，则将数据存储到缓冲区中，并返回1。否则，部分数据将留在缓冲区中，等待下一次读取，并返回0
+ * */
 int readChildInfo(childInfoType *information_type, size_t *cow, monotime *cow_updated, size_t *keys, double* progress) {
     /* We are using here a static buffer in combination with the server.child_info_nread to handle short reads */
     static child_info_data buffer;
@@ -138,6 +141,7 @@ int readChildInfo(childInfoType *information_type, size_t *cow, monotime *cow_up
     /* Do not overlap */
     if (server.child_info_nread == wlen) server.child_info_nread = 0;
 
+    // 从管道中接受子进程信息到 child_info_data 中
     int nread = read(server.child_info_pipe[0], (char *)&buffer + server.child_info_nread, wlen - server.child_info_nread);
     if (nread > 0) {
         server.child_info_nread += nread;

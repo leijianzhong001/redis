@@ -97,15 +97,15 @@
 #define rdbIsObjectType(t) ((t >= 0 && t <= 7) || (t >= 9 && t <= 15))
 
 /* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType). */
-#define RDB_OPCODE_MODULE_AUX 247   /* Module auxiliary data. */
-#define RDB_OPCODE_IDLE       248   /* LRU idle time. */
-#define RDB_OPCODE_FREQ       249   /* LFU frequency. */
-#define RDB_OPCODE_AUX        250   /* RDB aux field. */
-#define RDB_OPCODE_RESIZEDB   251   /* Hash table resize hint. */
-#define RDB_OPCODE_EXPIRETIME_MS 252    /* Expire time in milliseconds. 0xFC */
-#define RDB_OPCODE_EXPIRETIME 253       /* Old expire time in seconds. */
-#define RDB_OPCODE_SELECTDB   254   /* DB number of the following keys. */
-#define RDB_OPCODE_EOF        255   /* End of the RDB file. */
+#define RDB_OPCODE_MODULE_AUX 247   /* Module auxiliary data.                  0xF7 redis module的元属性，可以存储任意的的 key-value 对 */
+#define RDB_OPCODE_IDLE       248   /* LRU idle time.                          0xF8，redis key的LRU信息 */
+#define RDB_OPCODE_FREQ       249   /* LFU frequency.                          0xF9，redis key的LFU信息 */
+#define RDB_OPCODE_AUX        250   /* RDB aux field.                          0xFA，redis元属性 ，可以存储任意的的 key-value 对 */
+#define RDB_OPCODE_RESIZEDB   251   /* Hash table resize hint.                 0xFB，redis dbsize，描述 key 数目和设置了过期时间 key 数目 */
+#define RDB_OPCODE_EXPIRETIME_MS 252    /* Expire time in milliseconds.        0xFC，redis过期时间，使用毫秒表示。 */
+#define RDB_OPCODE_EXPIRETIME 253       /* Old expire time in seconds.         0xFD，redis过期时间，使用秒表示。 */
+#define RDB_OPCODE_SELECTDB   254   /* DB number of the following keys.        0xFE，redis数据库编号 */
+#define RDB_OPCODE_EOF        255   /* End of the RDB file.                    0xFF，rdb文件结束符 */
 
 /* Module serialized values sub opcodes */
 #define RDB_MODULE_OPCODE_EOF   0   /* End of module value. */

@@ -875,7 +875,7 @@ typedef struct client {
                                the master. */
     size_t querybuf_peak;   /* Recent (100ms or more) peak of querybuf size.   客户端单次读取请求数据量的峰值*/
     int argc;               /* Num of arguments of current command. */
-    robj **argv;            /* Arguments of current command.                   argv[0]是命令名，后面的都是命令参数 */
+    robj **argv;            /* Arguments of current command.                   argv[0]是命令名，后面的都是命令参数.argv中的元素都是string类型的redisObject对象 */
     int original_argc;      /* Num of arguments of original command if arguments were rewritten. */
     robj **original_argv;   /* Arguments of original command if arguments were rewritten. */
     size_t argv_len_sum;    /* Sum of lengths of objects in argv list. */
@@ -885,13 +885,13 @@ typedef struct client {
                                anything (admin). */
     int reqtype;            /* Request protocol type: PROTO_REQ_*              请求数据协议类型 */
     int multibulklen;       /* Number of multi bulk arguments left to read.    当前解析的命令请求中尚未处理的命令参数数量 */
-    long bulklen;           /* Length of bulk argument in multi bulk request.  当前读取命令参数长度 */
+    long bulklen;           /* Length of bulk argument in multi bulk request.  当前读取命令参数长度。比如【*3\r\n$3set\r\n$5hello\r\n$5world\r\n】中的$3中的3或者$5中的5 */
     list *reply;            /* List of reply objects to send to the client.    链表回复缓冲区（动态输出缓冲区）用于存放redis返回给用户的响应数据
                                                                                这个链表实际上是 clientReplyBlock 结构体链表。*/
     unsigned long long reply_bytes; /* Tot bytes of objects in reply list.     链表回复缓冲区字节数 */
     list *deferred_reply_errors;    /* Used for module thread safe contexts. */
     size_t sentlen;         /* Amount of bytes already sent in the current
-                               buffer or object being sent. */
+                               buffer or object being sent.                    在当前缓冲区或正在发送的对象中已发送的字节数 */
     time_t ctime;           /* Client creation time. */
     long duration;          /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     time_t lastinteraction; /* Time of the last interaction, used for timeout */
@@ -904,9 +904,9 @@ typedef struct client {
     off_t repldboff;        /* Replication DB file offset. */
     off_t repldbsize;       /* Replication DB file size. */
     sds replpreamble;       /* Replication DB preamble. */
-    long long read_reploff; /* Read replication offset if this is a master. */
-    long long reploff;      /* Applied replication offset if this is a master. */
-    long long repl_ack_off; /* Replication ack offset, if this is a slave. */
+    long long read_reploff; /* Read replication offset if this is a master.    当前节点已从该主节点上读取的复制偏移量，这个偏移量会在每次读到主节点请求时累加 */
+    long long reploff;      /* Applied replication offset if this is a master. 当前节点已从该主节点成功复制的复制偏移量 */
+    long long repl_ack_off; /* Replication ack offset, if this is a slave.     当前主节点已经收到的该从节点上被确认的复制偏移量 */
     long long repl_ack_time;/* Replication ack time, if this is a slave. */
     long long repl_last_partial_write; /* The last time the server did a partial write from the RDB child pipe to this replica  */
     long long psync_initial_offset; /* FULLRESYNC reply offset other slaves
@@ -956,6 +956,9 @@ typedef struct client {
     char buf[PROTO_REPLY_CHUNK_BYTES]; /*                                      固定输出缓冲区. */
 } client;
 
+// save 3600 1
+// save 300 100
+// save 60 10000
 struct saveparam {
     time_t seconds;
     int changes;
@@ -1101,12 +1104,12 @@ struct redisMemOverhead {
  * top-level master. */
 typedef struct rdbSaveInfo {
     /* Used saving and loading. */
-    int repl_stream_db;  /* DB to select in server.master client. */
+    int repl_stream_db;  /* DB to select in server.master client.              server.master选中的库，其实就是执行命令时的当前库 */
 
     /* Used only loading. */
-    int repl_id_is_set;  /* True if repl_id field is set. */
-    char repl_id[CONFIG_RUN_ID_SIZE+1];     /* Replication ID. */
-    long long repl_offset;                  /* Replication offset. */
+    int repl_id_is_set;  /* True if repl_id field is set.                      repl_id是否被设置 */
+    char repl_id[CONFIG_RUN_ID_SIZE+1];     /* Replication ID.                 repl_id 字符串 */
+    long long repl_offset;                  /* Replication offset.             复制偏移量 */
 } rdbSaveInfo;
 
 #define RDB_SAVE_INFO_INIT {-1,0,"0000000000000000000000000000000000000000",-1}
@@ -1298,9 +1301,9 @@ struct redisServer {
     struct malloc_stats cron_malloc_stats; /* sampled in serverCron(). */
     redisAtomic long long stat_net_input_bytes; /* Bytes read from network. */
     redisAtomic long long stat_net_output_bytes; /* Bytes written to network. */
-    size_t stat_current_cow_bytes;  /* Copy on write bytes while child is active. */
-    monotime stat_current_cow_updated;  /* Last update time of stat_current_cow_bytes */
-    size_t stat_current_save_keys_processed;  /* Processed keys while child is active. */
+    size_t stat_current_cow_bytes;  /* Copy on write bytes while child is active. 在子进程活跃期间写时复制占用的字节数 */
+    monotime stat_current_cow_updated;  /* Last update time of stat_current_cow_bytes  stat_current_cow_bytes 最近更新时间 */
+    size_t stat_current_save_keys_processed;  /* Processed keys while child is active. 子进程处于活动状态时已写入的键数量 */
     size_t stat_current_save_keys_total;  /* Number of keys when child started. */
     size_t stat_rdb_cow_bytes;      /* Copy on write bytes during RDB saving. */
     size_t stat_aof_cow_bytes;      /* Copy on write bytes during AOF rewrite. */
@@ -1425,8 +1428,8 @@ struct redisServer {
                                      * loading aof or rdb. (for testings). negative
                                      * value means fractions of microsecons (on average). */
     /* Pipe and data structures for child -> parent info sharing. */
-    int child_info_pipe[2];         /* Pipe used to write the child_info_data. */
-    int child_info_nread;           /* Num of bytes of the last read from pipe */
+    int child_info_pipe[2];         /* Pipe used to write the child_info_data. 用于写入 child_info_data 的管道 */
+    int child_info_nread;           /* Num of bytes of the last read from pipe 最后一次从管道中读取的字节数 */
     /* Propagation of commands in AOF / replication */
     redisOpArray also_propagate;    /* Additional command to propagate. */
     int replication_allowed;        /* Are we allowed to replicate? */
@@ -1443,17 +1446,17 @@ struct redisServer {
     /* Replication (master) */
     char replid[CONFIG_RUN_ID_SIZE+1];  /* My current replication ID. */
     char replid2[CONFIG_RUN_ID_SIZE+1]; /* replid inherited from master*/
-    long long master_repl_offset;   /* My current replication offset */
+    long long master_repl_offset;   /* My current replication offset           表示当前主节点的复制偏移量 */
     long long second_replid_offset; /* Accept offsets up to this for replid2. */
-    int slaveseldb;                 /* Last SELECTed DB in replication output */
+    int slaveseldb;                 /* Last SELECTed DB in replication output  最后一次复制输出中选择的DB */
     int repl_ping_slave_period;     /* Master pings the slave every N seconds */
-    char *repl_backlog;             /* Replication backlog for partial syncs */
-    long long repl_backlog_size;    /* Backlog circular buffer size */
-    long long repl_backlog_histlen; /* Backlog actual data length */
+    char *repl_backlog;             /* Replication backlog for partial syncs   复制积压缓冲区 */
+    long long repl_backlog_size;    /* Backlog circular buffer size            复制积压缓冲区大小 */
+    long long repl_backlog_histlen; /* Backlog actual data length              复制积压缓冲区已保存数据的有效长度。根据统计指标，可算出复制积压缓冲区内的可用偏移量范围： [repl_backlog_first_byte_offset, repl_backlog_first_byte_offset+repl_backlog_histlen]。 */
     long long repl_backlog_idx;     /* Backlog circular buffer current offset,
-                                       that is the next byte will'll write to.*/
+                                       that is the next byte will'll write to. 复制积压缓冲区当前偏移量，即下一个字节将写入的位置 */
     long long repl_backlog_off;     /* Replication "master offset" of first
-                                       byte in the replication backlog buffer.*/
+                                       byte in the replication backlog buffer. 起始偏移量，对应info信息中的 repl_backlog_first_byte_offset， 可用于计算当前缓冲区可用范围。 */
     time_t repl_backlog_time_limit; /* Time without slaves after the backlog
                                        gets released. */
     time_t repl_no_slaves_since;    /* We have no slaves since that time.
@@ -1471,7 +1474,7 @@ struct redisServer {
     char *masterhost;               /* Hostname of master */
     int masterport;                 /* Port of master */
     int repl_timeout;               /* Timeout after N seconds of master idle */
-    client *master;     /* Client that is master for this slave */
+    client *master;     /* Client that is master for this slave                从节点的主节点客户端 */
     client *cached_master; /* Cached master to be reused for PSYNC. */
     int repl_syncio_timeout; /* Timeout for synchronous I/O calls */
     int repl_state;          /* Replication status if the instance is a slave */

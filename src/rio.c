@@ -85,6 +85,22 @@ static int rioBufferFlush(rio *r) {
     return 1; /* Nothing to do, our write just appends to the buffer. */
 }
 
+/**
+ * 内核缓冲区：
+ *      众所周知， 读写磁盘代价高昂， 因此 【Unix 内核系统定义了内核缓冲区】，只有当缓冲区已满或者读取数据不在缓冲区时才会读取磁盘
+ *      POSIX 标准定义了一系列函数，如open、read、write、fsync等， 他们都会使用内核缓冲区。这些函数通常也被称为不带缓冲区的io函数。
+ *      假设内核缓冲区中的长度为60字节，调用write函数每次写入10个字节，那么需要进行6此write调用，才能将内核缓冲区写满并刷出到磁盘，而内核缓冲区未写满时，数据会停留在内核缓冲区中
+ *      fsync函数负责磁盘同步，将内核缓冲区内容刷出到磁盘上
+ *
+ * IO缓冲区：
+ *      由于在用户空间读写数据比进入内核读写数据更快，所以c标准库在用户空间也定了以IO缓冲区（也称为用户进程缓冲区），并且定义了一系列使用IO缓存的函数，如fopen、fwrite、fget、fflush等，这些函数通常被称为标准IO函数。
+ *      使用这些函数，C语言会读写IO缓冲区，当IO缓冲区已满或者读取的数据不在io缓冲区时， 才进入内核读写数据；
+ *      假设IO缓冲区长度为30个字节，内核缓冲区为60个字节， 调用fwrite每次写入10字节数据,则需调用3次才能将IO缓冲区写满并刷新到内核缓冲区。而将内核缓冲区写满并刷新到磁盘文件则需要调用6次。 fflush函数负责将io缓冲区中的数据刷出到内核缓冲区
+ *      所以如果使用了标准的IO函数写文件，那么为了保证所有的数据都写入磁盘， 需要先调用fflush, 再用fsync。 例如， 在 rio.c/rioFileIO 变量中使用 fread、fwrite 函数读写数据， 所以 rdb函数为了保证所有RDB数据都写入磁盘， 必须先调用fflush函数，再调用fsync函数。
+ * 如果使用不带缓冲的io函数，则只需要调用fsync函数刷新内核缓冲区内容到磁盘即可。
+ *
+ *
+ */
 static const rio rioBufferIO = {
     rioBufferRead,
     rioBufferWrite,
@@ -116,7 +132,9 @@ static size_t rioFileWrite(rio *r, const void *buf, size_t len) {
     if (r->io.file.autosync &&
         r->io.file.buffered >= r->io.file.autosync)
     {
+        // 先刷出数据到内核缓冲区
         fflush(r->io.file.fp);
+        // 再刷出数据到磁盘
         if (redis_fsync(fileno(r->io.file.fp)) == -1) return 0;
         r->io.file.buffered = 0;
     }

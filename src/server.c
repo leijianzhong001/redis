@@ -1609,7 +1609,9 @@ const char *strChildType(int type) {
 }
 
 /* Return true if there are active children processes doing RDB saving,
- * AOF rewriting, or some side process spawned by a loaded module. */
+ * AOF rewriting, or some side process spawned by a loaded module.
+ * 如果有活动的子进程正在进行RDB保存、AOF重写或由加载模块生成的一些副进程，则返回true。
+ * */
 int hasActiveChildProcess() {
     return server.child_pid != -1;
 }
@@ -1978,16 +1980,27 @@ void checkChildrenDone(void) {
     int statloc = 0;
     pid_t pid;
 
+    // 【1】 调用c语言的 wait3 函数检测是否存在已结束的子进程
+    // c语言的wait3函数是wait函数族中的一员，它可以阻塞当前进程，知道某个子进程结束。如果在调用 wait3 函数时，存在已经结束的子进程，则 wait3 函数会立即返回该子进程的 pid
+    // Redis当然不会阻塞主进程，通过设置 wait3 的第二个参数为 WNOHANG ， 指定了不阻塞当前进程，如果存在已结束的子进程，则返回对应的pid，否则返回0
     if ((pid = waitpid(-1, &statloc, WNOHANG)) != 0) {
+        // 以下三个宏负责获取子进程的的结束代码和中断信号：
+        //      WEXITSTATUS: 获取子进程 exit() 返回的结束代码
+        //      WIFSIGNALED: 如果子进程是因为信号结束的，则此宏的值为真
+        //      WTERMSIG: 如果子进程因信号而终止， 则获取该信号代码
+        // 例如，可以通过kill函数发送 SIGKILL 信号给其他进程，如果其他进程响应该信号并终止了进程，则使用 WTERMSIG 宏可以获取 SIGKILL 信号
         int exitcode = WIFEXITED(statloc) ? WEXITSTATUS(statloc) : -1;
         int bysignal = 0;
 
+        // 【2】 获取子进程的结束代码和中断信号，需要根据这些标志进行不同的逻辑处理
         if (WIFSIGNALED(statloc)) bysignal = WTERMSIG(statloc);
 
         /* sigKillChildHandler catches the signal and calls exit(), but we
          * must make sure not to flag lastbgsave_status, etc incorrectly.
          * We could directly terminate the child process via SIGUSR1
-         * without handling it */
+         * without handling it
+         * sigKillChildHandler捕获信号并调用exit()，但我们必须确保不会错误地标记 lastbgsave_status  。我们可以直接通过 SIGUSR1 终止子进程而不处理它
+         * */
         if (exitcode == SERVER_CHILD_NOERROR_RETVAL) {
             bysignal = SIGUSR1;
             exitcode = 1;
@@ -2001,6 +2014,8 @@ void checkChildrenDone(void) {
                 (int) server.child_pid);
         } else if (pid == server.child_pid) {
             if (server.child_type == CHILD_TYPE_RDB) {
+                // 【3】 如果子进程是RDB进程，则调用 backgroundSaveDoneHandler 函数。如果rdbji进程处理成功，那么 backgroundSaveDoneHandler 函数会更新父进程的 server.dirty, server.lastbgsave_status, server.lastsave等属性。
+                // 该函数还有一个很重要的操作， 如果rdb数据保存到了磁盘上，则需要将rdb文件发送给正在全量同步的从服务器。
                 backgroundSaveDoneHandler(exitcode, bysignal);
             } else if (server.child_type == CHILD_TYPE_AOF) {
                 backgroundRewriteDoneHandler(exitcode, bysignal);
@@ -2186,12 +2201,16 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         rewriteAppendOnlyFileBackground();
     }
 
+    // 【1】 当前当前程序中存在子进程， 则调用 checkChildrenDone 函数检查子进程是否已经执行完成，如果已完成，则由父进程执行收尾工作
     /* Check if a background saving or AOF rewrite in progress terminated. */
     if (hasActiveChildProcess() || ldbPendingChildren())
     {
         run_with_period(1000) receiveChildInfo();
         checkChildrenDone();
     } else {
+        // 【2】 server.dirty 记录上一次rdb文件生成以后，Redis服务器变更了多少键。如果满足以下条件，则调用 rdbSaveBackground 函数生成rdb文件：
+        //      1、满足server.saveparams配置的条件；
+        //      2、上一次rdb操作成功或者现在离上一次rdbc操作已过去的时间大于 CONFIG_BGSAVE_RETRY_DELAY(5s)
         /* If there is not a background saving/rewrite in progress check if
          * we have to save/rewrite now. */
         for (j = 0; j < server.saveparamslen; j++) {
@@ -2200,16 +2219,21 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             /* Save if we reached the given amount of changes,
              * the given amount of seconds, and if the latest bgsave was
              * successful or if, in case of an error, at least
-             * CONFIG_BGSAVE_RETRY_DELAY seconds already elapsed. */
-            if (server.dirty >= sp->changes &&
-                server.unixtime-server.lastsave > sp->seconds &&
+             * CONFIG_BGSAVE_RETRY_DELAY seconds already elapsed.
+             * 如果我们达到了给定的更改量、给定的秒数，如果最近的bgsave成功，或者在发生错误的情况下，至少已经经过了 CONFIG_BGSAVE_RETRY_DELAY 秒数，则保存。
+             *
+             * server.dirty 记录上一次rdb文件生成以后，Redis服务器变更了多少键
+             * */
+            if (server.dirty >= sp->changes && // 达到了给定的更改量
+                server.unixtime-server.lastsave > sp->seconds && // 达到了给定的秒数
                 (server.unixtime-server.lastbgsave_try >
                  CONFIG_BGSAVE_RETRY_DELAY ||
-                 server.lastbgsave_status == C_OK))
+                 server.lastbgsave_status == C_OK)) // 最近的bgsave成功，或者在发生错误的情况下，至少已经经过了 CONFIG_BGSAVE_RETRY_DELAY 秒数
             {
                 serverLog(LL_NOTICE,"%d changes in %d seconds. Saving...",
                     sp->changes, (int)sp->seconds);
                 rdbSaveInfo rsi, *rsiptr;
+                // rdbPopulateSaveInfo 函数生成一个 rdbSaveInfo 变量， 该变量作为 rdbPopulateSaveInfo 的参数用于控制rdb过程中生成的辅助字段
                 rsiptr = rdbPopulateSaveInfo(&rsi);
                 rdbSaveBackground(server.rdb_filename,rsiptr);
                 break;
@@ -2404,7 +2428,10 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * the event loop from processEventsWhileBlocked(). Note that in this
      * case we keep track of the number of events we are processing, since
      * processEventsWhileBlocked() wants to stop ASAP if there are no longer
-     * events to handle. */
+     * events to handle.
+     * 只调用重要函数的子集，以防我们从 processEventsWhileBlocked() 重新进入事件循环。
+     * 请注意，在本例中，我们跟踪正在处理的事件数量，因为 processEventsWhileBlocked() 希望在不再有事件要处理时尽快停止。
+     * */
     if (ProcessingEventsWhileBlocked) {
         uint64_t processed = 0;
         processed += handleClientsWithPendingReadsUsingThreads();
@@ -2418,7 +2445,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Handle precise timeouts of blocked clients. */
     handleBlockedClientsTimeout();
 
-    /* We should handle pending reads clients ASAP after event loop. */
+    /* We should handle pending reads clients ASAP after event loop.
+     * 在多线程io的情况下，该函数会将 server.clients_pending_read 的客户端分配给各个IO线程，等待IO线程读取并解析请求数据
+     * */
     handleClientsWithPendingReadsUsingThreads();
 
     /* Handle TLS pending data. (must be done before flushAppendOnlyFile) */
@@ -2488,7 +2517,10 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (server.aof_state == AOF_ON)
         flushAppendOnlyFile(0);
 
-    /* Handle writes with pending output buffers. */
+    /* Handle writes with pending output buffers.
+     * 返回响应数据的最后一步是将回复缓冲区的数据写入tcp发送缓冲区，TCP机制会保证将发送缓冲区中的内容发送给客户端。该步骤由下面的函数：
+     * handleClientsWithPendingWrites 完成。
+     * */
     handleClientsWithPendingWritesUsingThreads();
 
     /* Close clients that need to be closed asynchronous */
@@ -2791,6 +2823,7 @@ void initServerConfig(void) {
      * redis.conf using the rename-command directive. */
     server.commands = dictCreate(&commandTableDictType,NULL);
     server.orig_commands = dictCreate(&commandTableDictType,NULL);
+    // populateCommandTable 函数将 server.redisCommandTable 这个数组中的所有命令数据加载到 server.commands 命令字典中
     populateCommandTable();
     server.delCommand = lookupCommandByCString("del");
     server.multiCommand = lookupCommandByCString("multi");
@@ -3462,6 +3495,7 @@ void initServer(void) {
  * see: https://sourceware.org/bugzilla/show_bug.cgi?id=19329 */
 void InitServerLast() {
     bioInit();
+    // 初始化IO线程
     initThreadedIO();
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
     server.initial_memory_usage = zmalloc_used_memory();
@@ -3534,14 +3568,14 @@ int populateCommandTableParseFlags(struct redisCommand *c, char *strflags) {
 
 /* Populates the Redis Command Table starting from the hard coded list
  * we have on top of server.c file.
- * populateCommandTable 函数将server.redisCommandTable这个数组中的所有命令数据加载到奥server.commands命令字典中（initServerConfig）
+ * populateCommandTable 函数将 server.redisCommandTable 这个数组中的所有命令数据加载到 server.commands 命令字典中（initServerConfig）
  * */
 void populateCommandTable(void) {
     int j;
     int numcommands = sizeof(redisCommandTable)/sizeof(struct redisCommand);
 
     for (j = 0; j < numcommands; j++) {
-        struct redisCommand *c = redisCommandT able+j;
+        struct redisCommand *c = redisCommandTable+j;
         int retval1, retval2;
 
         /* Translate the command string flags description into an actual
@@ -3805,6 +3839,7 @@ void call(client *c, int flags) {
     redisOpArrayInit(&server.also_propagate);
 
     /* Call the command. */
+    // dirty 变量用于记录是否变更了数据
     dirty = server.dirty;
     prev_err_count = server.stat_total_error_replies;
 
@@ -3826,7 +3861,9 @@ void call(client *c, int flags) {
     server.in_nested_call--;
 
     /* In order to avoid performance implication due to querying the clock using a system call 3 times,
-     * we use a monotonic clock, when we are sure its cost is very low, and fall back to non-monotonic call otherwise. */
+     * we use a monotonic clock, when we are sure its cost is very low, and fall back to non-monotonic call otherwise.
+     * 为了避免由于使用3次系统调用查询时钟而导致的性能影响，当我们确定其成本非常低时，我们使用单调时钟，否则则退回到非单调调用。
+     * */
     ustime_t duration;
     if (monotonicGetType() == MONOTONIC_CLOCK_HW)
         duration = getMonotonicUs() - monotonic_start;
@@ -3847,7 +3884,7 @@ void call(client *c, int flags) {
 
     /* After executing command, we will close the client after writing entire
      * reply if it is set 'CLIENT_CLOSE_AFTER_COMMAND' flag. */
-    // 【3.1】 将 CLIENT_CLOSE_AFTER_COMMAND标记替换为CLIENT_CLOSE_AFTER_REPLY，要求尽快关闭客户端
+    // 【3.1】 将 CLIENT_CLOSE_AFTER_COMMAND 标记替换为 CLIENT_CLOSE_AFTER_REPLY，要求尽快关闭客户端
     if (c->flags & CLIENT_CLOSE_AFTER_COMMAND) {
         c->flags &= ~CLIENT_CLOSE_AFTER_COMMAND;
         c->flags |= CLIENT_CLOSE_AFTER_REPLY;
@@ -3862,8 +3899,8 @@ void call(client *c, int flags) {
     /* If the caller is Lua, we want to force the EVAL caller to propagate
      * the script if the command flag or client flag are forcing the
      * propagation. */
-    // 【3.2】 如果当前客户端是一个lua脚本为客户端，即将该客户端的CLIENT_FORCE_REPL，CLIENT_FORCE_AOF标志转移到真实的客户端中
-    // 在lua脚本中调用redis.call函数，redis会构建伪客户端调用call函数并将真实的客户端client记录到server.lua_caller中，这样命令执行过程中打开的CLIENT_FORCE_REPL和CLIENT_FORCE_AOF会添加到伪客户端中，所以这里需要转移这些标志
+    // 【3.2】 如果当前客户端是一个lua脚本伪客户端，即将该客户端的 CLIENT_FORCE_REPL，CLIENT_FORCE_AOF 标志转移到真实的客户端中
+    // 在lua脚本中调用 redis.call 函数，redis会构建伪客户端调用call函数并将真实的客户端client记录到server.lua_caller中，这样命令执行过程中打开的 CLIENT_FORCE_REPL和CLIENT_FORCE_AOF 会添加到伪客户端中，所以这里需要转移这些标志
     if (c->flags & CLIENT_LUA && server.lua_caller) {
         if (c->flags & CLIENT_FORCE_REPL)
             server.lua_caller->flags |= CLIENT_FORCE_REPL;
@@ -3910,7 +3947,7 @@ void call(client *c, int flags) {
     }
 
     /* Propagate the command into the AOF and replication link */
-    // 【4】 propagate函数根据propagate_flags变量中的标志，将命令记录到aof文件或复制到从服务器中。propagate_flags变量根据以下判断条件生成
+    // 【4】 propagate函数根据 propagate_flags 变量中的标志，将命令记录到aof文件或复制到从服务器中。propagate_flags 变量根据以下判断条件生成
     if (flags & CMD_CALL_PROPAGATE &&
         (c->flags & CLIENT_PREVENT_PROP) != CLIENT_PREVENT_PROP)
     {
@@ -3923,14 +3960,14 @@ void call(client *c, int flags) {
 
         /* If the client forced AOF / replication of the command, set
          * the flags regardless of the command effects on the data set. */
-        // 【4.2】 如果client打开了CLIENT_FORCE_REPL、CLIENT_FORCE_AOF标志，则propagate_flags添加PROPAGATE_REPL，PROPAGATE_AOF标志
+        // 【4.2】 如果client打开了 CLIENT_FORCE_REPL、CLIENT_FORCE_AOF 标志，则 propagate_flags 添加 PROPAGATE_REPL，PROPAGATE_AOF 标志
         if (c->flags & CLIENT_FORCE_REPL) propagate_flags |= PROPAGATE_REPL;
         if (c->flags & CLIENT_FORCE_AOF) propagate_flags |= PROPAGATE_AOF;
 
         /* However prevent AOF / replication propagation if the command
          * implementation called preventCommandPropagation() or similar,
          * or if we don't have the call() flags to do so. */
-        // 【4.3】 如果client打开了CLIENT_PREVENT_REPL_PROP、CLIENT_PREVENT_AOF_PROP，则propagate_flags清除PROPAGATE_REPL，PROPAGATE_AOF
+        // 【4.3】 如果client打开了 CLIENT_PREVENT_REPL_PROP、CLIENT_PREVENT_AOF_PROP，则 propagate_flags 清除 PROPAGATE_REPL，PROPAGATE_AOF
         if (c->flags & CLIENT_PREVENT_REPL_PROP ||
             !(flags & CMD_CALL_PROPAGATE_REPL))
                 propagate_flags &= ~PROPAGATE_REPL;
@@ -3947,7 +3984,7 @@ void call(client *c, int flags) {
 
     /* Restore the old replication flags, since call() can be executed
      * recursively. */
-    // 【5】 命令执行前，会清除client中的传播控制标志。如果client.flags中本来存在这些标志,则将他们重新赋值给client.flags
+    // 【5】 命令执行前，会清除client中的传播控制标志。如果 client.flags 中本来存在这些标志,则将他们重新赋值给 client.flags
     c->flags &= ~(CLIENT_FORCE_AOF|CLIENT_FORCE_REPL|CLIENT_PREVENT_PROP);
     c->flags |= client_old_flags &
         (CLIENT_FORCE_AOF|CLIENT_FORCE_REPL|CLIENT_PREVENT_PROP);
@@ -4104,7 +4141,7 @@ int processCommand(client *c) {
      * go through checking for replication and QUIT will cause trouble
      * when FORCE_REPLICATION is enabled and would be implemented in
      * a regular command proc. */
-    // 【2】 针对quit命令进行处理，给client添加CLIENT_CLOSE_AFTER_REPLY标识，退出
+    // 【2】 针对quit命令进行处理，给 client 添加 CLIENT_CLOSE_AFTER_REPLY 标识，退出
     if (!strcasecmp(c->argv[0]->ptr,"quit")) {
         addReply(c,shared.ok);
         c->flags |= CLIENT_CLOSE_AFTER_REPLY;
@@ -4113,7 +4150,7 @@ int processCommand(client *c) {
 
     /* Now lookup the command and check ASAP about trivial error conditions
      * such as wrong arity, bad command name and so forth. */
-    // 【3】 使用命令名，从server.commands命令字典中查找对应的redisCommand,并检查参数数量是否符合命令要求
+    // 【3】 使用命令名，从 server.commands 命令字典中查找对应的 redisCommand,并检查参数数量是否符合命令要求
     c->cmd = c->lastcmd = lookupCommand(c->argv[0]->ptr);
     if (!c->cmd) {
         // 没找到这个命令
@@ -4133,6 +4170,7 @@ int processCommand(client *c) {
         return C_OK;
     }
 
+    // 判断命令类型
     int is_read_command = (c->cmd->flags & CMD_READONLY) ||
                            (c->cmd->proc == execCommand && (c->mstate.cmd_flags & CMD_READONLY));
     int is_write_command = (c->cmd->flags & CMD_WRITE) ||
@@ -4146,7 +4184,7 @@ int processCommand(client *c) {
     int is_may_replicate_command = (c->cmd->flags & (CMD_WRITE | CMD_MAY_REPLICATE)) ||
                                    (c->cmd->proc == execCommand && (c->mstate.cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE)));
 
-    // 【4.1】 如果服务器要求了身份验证，则检查客户端是否通过了身份验证，未通过身份认证的客户端只能执行auth命令，其他命令江北拒绝
+    // 【4.1】 如果服务器要求了身份验证，则检查客户端是否通过了身份验证，未通过身份认证的客户端只能执行auth命令，其他命令将被拒绝
     if (authRequired(c)) {
         /* AUTH and HELLO and no auth commands are valid even in
          * non-authenticated state. */
@@ -4263,7 +4301,7 @@ int processCommand(client *c) {
 
     /* Make sure to use a reasonable amount of memory for client side
      * caching metadata. */
-    // 【4.5】 Redis Tracking机制要求服务器记录客户端查询过的key，如果服务器记录的key数量大于server.tracking_table_max_keys，那么随机删除其中一些键，并向对应的客户端发布失效消息
+    // 【4.5】 Redis Tracking 机制要求服务器记录客户端查询过的key，如果服务器记录的key数量大于server.tracking_table_max_keys，那么随机删除其中一些键，并向对应的客户端发布失效消息
     if (server.tracking_clients) trackingLimitUsedSlots();
 
     /* Don't accept write commands if there are problems persisting on disk
@@ -4285,7 +4323,7 @@ int processCommand(client *c) {
 
     /* Don't accept write commands if there are not enough good slaves and
      * user configured the min-slaves-to-write option. */
-    // 【4.7】 如果当前服务器是主节点并且其正常的slave数量小于 server.repl_min_slaves_to_write 配置，则决绝命令
+    // 【4.7】 如果当前服务器是主节点并且其正常的slave数量小于 server.repl_min_slaves_to_write 配置，则拒绝命令
     if (server.masterhost == NULL &&
         server.repl_min_slaves_to_write &&
         server.repl_min_slaves_max_lag &&
@@ -4298,7 +4336,7 @@ int processCommand(client *c) {
 
     /* Don't accept write commands if this is a read only slave. But
      * accept write commands if this is our master. */
-    // 【4.8】 如果当前节点是从节点并且客户端非主节点客户端，则拒绝命令
+    // 【4.8】 如果当前节点是从节点并且客户端非主节点客户端，说明不是主从复制，拒绝命令
     if (server.masterhost && server.repl_slave_ro &&
         !(c->flags & CLIENT_MASTER) &&
         is_write_command)
@@ -4393,7 +4431,7 @@ int processCommand(client *c) {
     }
 
     /* Exec the command */
-    // 【5】 如果处于事务上下文中，那么出了exec/discard/multi/watch外的命令都会被列入事务队列中，否则执行命令
+    // 【5】 如果处于事务上下文中，那么除了 exec/discard/multi/watch 外的命令都会被列入事务队列中，否则执行命令
     if (c->flags & CLIENT_MULTI &&
         c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
         c->cmd->proc != multiCommand && c->cmd->proc != watchCommand &&
@@ -6026,6 +6064,12 @@ int redisFork(int purpose) {
 
     int childpid;
     long long start = ustime();
+    // fork 出一个子进程， 从这里开始，父进程和子进程分开执行
+    // 写时复制COW: fork 函数生成子进程后，内核把父进程中所有的内存页都设为 read-only, 然后子进程的地址空间指向父进程，父子进程共享内存空间。
+    // 如果复制进程都只读内存，则一切正常。而当其中某个进程写内存时， CPU硬件检测到内存页是 read-only 的，就会触发页异常中断，这时内核就会把触发异常的内存页复制一份，于是父子进程各自持有一份独立的内存页。
+    // fork 后，如果父进程或子进程进行了大量的写操作，就会触发大量的页中断和内存拷贝，可能导致性能降低。所以在rdb进程在生成文件期间，父子进程都应该尽量减少对内存数据的修改。
+    // 如果redis在此时进行hash扩容操作, 必然导致大量内存数据修改，性能较低。
+    // 因此redis定义了 dict_force_resize_radio 参数， 在RDB过程中，开启 dict_force_resize_radio，此时只有在负载因子等于5时才会强制扩容
     if ((childpid = fork()) == 0) {
         /* Child */
         server.in_fork_child = purpose;
@@ -6089,10 +6133,13 @@ int checkForSentinelMode(int argc, char **argv) {
     return 0;
 }
 
-/* Function called at startup to load RDB or AOF file in memory. */
+/* Function called at startup to load RDB or AOF file in memory.
+ * 在启动时调用的函数，用于在内存中加载RDB或AOF文件
+ * */
 void loadDataFromDisk(void) {
     long long start = ustime();
     if (server.aof_state == AOF_ON) {
+        // 打开aof，则优先加载aof文件
         if (loadAppendOnlyFile(server.aof_filename) == C_OK)
             serverLog(LL_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
     } else {
@@ -6102,7 +6149,9 @@ void loadDataFromDisk(void) {
             serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
                 (float)(ustime()-start)/1000000);
 
-            /* Restore the replication ID / offset from the RDB file. */
+            /* Restore the replication ID / offset from the RDB file.
+             * 从RDB文件中恢复 replication ID / offset。
+             * */
             if ((server.masterhost ||
                 (server.cluster_enabled &&
                 nodeIsSlave(server.cluster->myself))) &&
