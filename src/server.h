@@ -1357,21 +1357,21 @@ struct redisServer {
     /* AOF persistence */
     int aof_enabled;                /* AOF configuration */
     int aof_state;                  /* AOF_(ON|OFF|WAIT_REWRITE) */
-    int aof_fsync;                  /* Kind of fsync() policy */
+    int aof_fsync;                  /* Kind of fsync() policy                  指定aof打开的情况下，命令刷出到磁盘的策略， 有 no、always、everysec 三种，默认为每秒刷出一次 everysec */
     char *aof_filename;             /* Name of the AOF file */
-    int aof_no_fsync_on_rewrite;    /* Don't fsync if a rewrite is in prog. */
-    int aof_rewrite_perc;           /* Rewrite AOF if % growth is > M and... */
-    off_t aof_rewrite_min_size;     /* the AOF file is at least N bytes. */
-    off_t aof_rewrite_base_size;    /* AOF size on latest startup or rewrite. */
+    int aof_no_fsync_on_rewrite;    /* Don't fsync if a rewrite is in prog.    在进行aof重写时，不进行磁盘同步*/
+    int aof_rewrite_perc;           /* Rewrite AOF if % growth is > M and...   如果当前的aof文件比上次增长了 aof_rewrite_perc%， 则重写aof文件 */
+    off_t aof_rewrite_min_size;     /* the AOF file is at least N bytes.       aof文件至少大于该值才吹进行aof重写 */
+    off_t aof_rewrite_base_size;    /* AOF size on latest startup or rewrite.  最近一次启动或重写时的AOF大小 */
     off_t aof_current_size;         /* AOF current size. */
     off_t aof_fsync_offset;         /* AOF offset which is already synced to disk. */
-    int aof_flush_sleep;            /* Micros to sleep before flush. (used by tests) */
-    int aof_rewrite_scheduled;      /* Rewrite once BGSAVE terminates. */
-    list *aof_rewrite_buf_blocks;   /* Hold changes during an AOF rewrite. */
+    int aof_flush_sleep;            /* Micros to sleep before flush. (used by tests) 在flush aof缓冲区的数据到磁盘之前，需要sleep的微妙数*/
+    int aof_rewrite_scheduled;      /* Rewrite once BGSAVE terminates.         一旦BGSAVE终止，重写aof文件 */
+    list *aof_rewrite_buf_blocks;   /* Hold changes during an AOF rewrite.     在AOF重写期间保持新的数据更改 */
     sds aof_buf;      /* AOF buffer, written before entering the event loop */
-    int aof_fd;       /* File descriptor of currently selected AOF file */
+    int aof_fd;       /* File descriptor of currently selected AOF file        当前选择的AOF文件的文件描述符 */
     int aof_selected_db; /* Currently selected DB in AOF */
-    time_t aof_flush_postponed_start; /* UNIX time of postponed AOF flush */
+    time_t aof_flush_postponed_start; /* UNIX time of postponed AOF flush      延迟的AOF刷新的UNIX时间，即在此时间之后，启动一次刷新aof缓冲区内容到磁盘 */
     time_t aof_last_fsync;            /* UNIX time of last fsync() */
     time_t aof_rewrite_time_last;   /* Time used by last AOF rewrite run. */
     time_t aof_rewrite_time_start;  /* Current AOF rewrite start time. */
@@ -1379,13 +1379,13 @@ struct redisServer {
     unsigned long aof_delayed_fsync;  /* delayed AOF fsync() counter */
     int aof_rewrite_incremental_fsync;/* fsync incrementally while aof rewriting? */
     int rdb_save_incremental_fsync;   /* fsync incrementally while rdb saving? */
-    int aof_last_write_status;      /* C_OK or C_ERR */
+    int aof_last_write_status;      /* C_OK or C_ERR                           上一次aof写出状态 */
     int aof_last_write_errno;       /* Valid if aof write/fsync status is ERR */
     int aof_load_truncated;         /* Don't stop on unexpected AOF EOF. */
     int aof_use_rdb_preamble;       /* Use RDB preamble on AOF rewrites. */
     redisAtomic int aof_bio_fsync_status; /* Status of AOF fsync in bio job. */
     redisAtomic int aof_bio_fsync_errno;  /* Errno of AOF fsync in bio job. */
-    /* AOF pipes used to communicate between parent and child during rewrite. */
+    /* AOF pipes used to communicate between parent and child during rewrite.  在重写期间用于父级和子级之间通信的AOF管道(文件描述符) */
     int aof_pipe_write_data_to_child;
     int aof_pipe_read_data_from_parent;
     int aof_pipe_write_ack_to_parent;
@@ -1393,7 +1393,7 @@ struct redisServer {
     int aof_pipe_write_ack_to_child;
     int aof_pipe_read_ack_from_parent;
     int aof_stop_sending_diff;     /* If true stop sending accumulated diffs
-                                      to child process. */
+                                      to child process.                        如果为true，停止向子进程发送累积的差异。 */
     sds aof_child_diff;             /* AOF diff accumulator child side. */
     /* RDB persistence */
     long long dirty;                /* Changes to DB from the last save */

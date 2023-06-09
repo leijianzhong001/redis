@@ -2195,9 +2195,11 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* Start a scheduled AOF rewrite if this was requested by the user while
      * a BGSAVE was in progress. */
+    // 【0】 server.aof_rewrite_scheduled 不为0， 代表存在延迟的aof重写操作（前面可能有正在进行的basave），如果程序当前没有子进程，则执行aof重写操作
     if (!hasActiveChildProcess() &&
         server.aof_rewrite_scheduled)
     {
+        // 执行aof重写操作
         rewriteAppendOnlyFileBackground();
     }
 
@@ -2240,17 +2242,20 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             }
         }
 
+        // 【3】 服务器开启了aof功能， 而且满足以下条件， 执行aof重写操作
         /* Trigger an AOF rewrite if needed. */
         if (server.aof_state == AOF_ON &&
-            !hasActiveChildProcess() &&
-            server.aof_rewrite_perc &&
-            server.aof_current_size > server.aof_rewrite_min_size)
+            !hasActiveChildProcess() && // 没有激活的子进程
+            server.aof_rewrite_perc && // 配置了aof重写触发的增长率阈值， 默认 100， 即比上次增长一倍才会触发重写
+            server.aof_current_size > server.aof_rewrite_min_size) // 当前aof的体积大于指定的最小阈值
         {
+            // aof_rewrite_base_size 表示 最近一次启动或重写时的AOF大小
             long long base = server.aof_rewrite_base_size ?
                 server.aof_rewrite_base_size : 1;
             long long growth = (server.aof_current_size*100/base) - 100;
             if (growth >= server.aof_rewrite_perc) {
                 serverLog(LL_NOTICE,"Starting automatic rewriting of AOF on %lld%% growth",growth);
+                // rewriteAppendOnlyFileBackground 负责重写aof文件
                 rewriteAppendOnlyFileBackground();
             }
         }
@@ -2260,15 +2265,23 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     updateDictResizePolicy();
 
 
+    // 【4】 server.aof_flush_postponed_start 不等于0，代表存在延迟的aof缓冲区刷新操作，这时刷新 aof 缓冲区内容到文件
     /* AOF postponed flush: Try at every cron cycle if the slow fsync
      * completed. */
     if (server.aof_state == AOF_ON && server.aof_flush_postponed_start)
+        // flushAppendOnlyFile 函数负责刷新aof缓冲区中的内容到文件
         flushAppendOnlyFile(0);
 
+    // 【5】 run_with_period 是redis定义的一个宏， 可以指定任务的执行周期。这里指定每经过1000ms， 执行以下操作：
+    //      如果上次aof缓冲区刷新操作中，写入磁盘出错， 则再次刷新aof缓冲区。
+    // 可以看出， serverCron 时间事件只有在aof缓冲区操作被延迟或写入出错时才触发 flushAppendOnlyFile 函数，正常情况下的 flushAppendOnlyFile 函数是在 beforeSleep 函数中触发的
     /* AOF write errors: in this case we have a buffer to flush as well and
      * clear the AOF error in case of success to make the DB writable again,
      * however to try every second is enough in case of 'hz' is set to
-     * a higher frequency. */
+     * a higher frequency.
+     *
+     * AOF写入错误:在这种情况下，我们也有一个缓冲区来刷新和清除AOF错误，如果成功地使DB再次可写，但是在“hz”被设置为更高频率的情况下，每秒尝试一次就足够了。
+     * */
     run_with_period(1000) {
         if (server.aof_state == AOF_ON && server.aof_last_write_status == C_ERR)
             flushAppendOnlyFile(0);
@@ -3696,6 +3709,14 @@ struct redisCommand *lookupCommandOrOriginal(sds name) {
  * However for functions that need to (also) propagate out of the context of a
  * command execution, for example when serving a blocked client, you
  * want to use propagate().
+ *
+ * 将指定的命令(在指定数据库id的上下文中)传播到AOF和Slaves。
+ * flags是一个如下选项之间的异或值：
+ *     + PROPAGATE_NONE(根本不传播命令)
+ *     + PROPAGATE_AOF(如果启用则传播到AOF文件)
+ *     + PROPAGATE_REPL(传播到复制链接)。
+ * 这不应该在命令实现中使用，因为它不会将结果命令包装在 MULTI/EXEC 中。使用 alsoPropagate()， preventCommandPropagation()， forceCommandPropagation() 代替。
+ * 但是，对于需要(也)在命令执行的上下文中传播的函数，例如在服务阻塞的客户机时，您希望使用propagate()。
  */
 void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
                int flags)
@@ -3715,9 +3736,12 @@ void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
      * client pause, otherwise data may be lossed during a failover. */
     serverAssert(!(areClientsPaused() && !server.client_pause_in_transaction));
 
+    // 在开启aof持久化的情况下，redis将执行的每个命令都传播到aaof缓冲区 server.aof_buf 中
     if (server.aof_state != AOF_OFF && flags & PROPAGATE_AOF)
+        // 传播已执行的命令到aof缓冲区 server.aof_buf 中
         feedAppendOnlyFile(cmd,dbid,argv,argc);
     if (flags & PROPAGATE_REPL)
+        // 传播命令给复制节点
         replicationFeedSlaves(server.slaves,dbid,argv,argc);
 }
 

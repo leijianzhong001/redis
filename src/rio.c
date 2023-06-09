@@ -134,7 +134,13 @@ static size_t rioFileWrite(rio *r, const void *buf, size_t len) {
     {
         // 先刷出数据到内核缓冲区
         fflush(r->io.file.fp);
-        // 再刷出数据到磁盘
+        /**
+         * 再刷出数据到磁盘
+         * redis_fsync:
+         * redis_fsync 在Linux中被定义为 fdatasync()，以避免刷新元数据。
+         * sync 函数刷新缓冲区时， 还会同步文件的描述信息（metadata， 包括 size、st_atime和st_mtime等）， 因为文件的数据和文件的描述信息通常保存在硬盘的不通地方。 因此fsync往往需要两次或以上的IO写操作。
+         * sync 函数中多余的一次IO操作代价是非常高昂的， 所以POSIX标准定义了 fdatasync() 函数，该函数同样可以刷新内核缓冲区， 但它仅在必要的情况下才会同步文件的描述信息
+         */
         if (redis_fsync(fileno(r->io.file.fp)) == -1) return 0;
         r->io.file.buffered = 0;
     }
