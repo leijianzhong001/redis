@@ -1864,7 +1864,23 @@ void aofClosePipes(void) {
  *    The the new file is reopened as the new append only file. Profit!
  *
  * 这是在后台重写aof文件的工作过程:
- * 1)用户调用BGREWRITEAOF 2) Redis调用这个函数，fork (): 2a)子进程重写临时文件中的只追加文件。2b)父节点在server.aof_rewrite_buf中累积差异。3)当孩子完成“2a”存在时。4)父程序将捕获退出代码，如果可以，将累积的数据附加到服务器。Aof_rewrite_buf到临时文件中，最后将以实际文件名重命名(2)临时文件。新文件作为新的追加文件重新打开。利润!
+ *     1) 用户调用 BGREWRITEAOF
+ *     2) Redis调用fork()函数 :
+ *          2a) 子进程重写临时文件中的aof文件。
+ *          2b) 父节点在 server.aof_rewrite_buf 中累积差异。
+ *     3) 当子进程完成“2a”操作退出时。
+ *     4) 父程序将捕获退出代码，如果结果为OK，则将累积到 server.aof_rewrite_buf 中的差异数据追加到临时文件中，最后将以实际文件名重命名(2)临时文件。新文件作为新的追加文件重新打开。
+ *
+ * 上面的描述其实有点瑕疵：更准确的aof重写三步走如下：
+ *      1、fork一个子进程， 成为aof进程，aof进程将当前redis内存中的数据保存到临时文件中；
+ *      2、父进程通过管道将重写期间的差异数据发给子进程，子进程将差异数据追加到临时文件，然后结束aof进程；
+ *      3、父进程执行收尾工作，将步骤2执行期间产生的差异数据也附加到临时文件中，然后将临时文件替换为正式文件
+ *
+ * rewriteAppendOnlyFileBackground 函数负责在后台完成aof重写操作。
+ * Redis 提供了 BGREWRITEAOF 命令，来执行aof重写操作，也是调用 rewriteAppendOnlyFileBackground 函数实现的
+ *
+ * 该函数会创建aof进程，并在aof进程中调用 rewriteAppendOnlyFile 函数重写aof文件。
+ * 另外，该函数调用了 aofCreatePipes 函数打开了【一条数据管道和两条控制管道】，数据管道用于主进程向aof进程传输增量命令，控制管道用于父子进程交互，控制何时停止传输数据。
  */
 int rewriteAppendOnlyFileBackground(void) {
     pid_t childpid;
@@ -1874,7 +1890,7 @@ int rewriteAppendOnlyFileBackground(void) {
     if ((childpid = redisFork(CHILD_TYPE_AOF)) == 0) {
         char tmpfile[256];
 
-        /* Child */
+        /* Child 子进程执行的代码段 */
         redisSetProcTitle("redis-aof-rewrite");
         redisSetCpuAffinity(server.aof_rewrite_cpulist);
         snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) getpid());
@@ -1885,7 +1901,7 @@ int rewriteAppendOnlyFileBackground(void) {
             exitFromChild(1);
         }
     } else {
-        /* Parent */
+        /* Parent 子进程执行的代码段*/
         if (childpid == -1) {
             serverLog(LL_WARNING,
                 "Can't rewrite append only file in background: fork: %s",

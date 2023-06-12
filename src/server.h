@@ -1386,12 +1386,12 @@ struct redisServer {
     redisAtomic int aof_bio_fsync_status; /* Status of AOF fsync in bio job. */
     redisAtomic int aof_bio_fsync_errno;  /* Errno of AOF fsync in bio job. */
     /* AOF pipes used to communicate between parent and child during rewrite.  在重写期间用于父级和子级之间通信的AOF管道(文件描述符) */
-    int aof_pipe_write_data_to_child;
-    int aof_pipe_read_data_from_parent;
-    int aof_pipe_write_ack_to_parent;
-    int aof_pipe_read_ack_from_child;
-    int aof_pipe_write_ack_to_child;
-    int aof_pipe_read_ack_from_parent;
+    int aof_pipe_write_data_to_child;  /*                                      父进程向子进程写数据的管道文件描述符 */
+    int aof_pipe_read_data_from_parent; /*                                     子进程从父进程读数据的管道文件描述符 */
+    int aof_pipe_write_ack_to_parent; /*                                       子进程向父进程发送停止标志，告诉父进程停止写数据的管道 */
+    int aof_pipe_read_ack_from_child; /*                                       父进程从子进程读取停止标志的管道 */
+    int aof_pipe_write_ack_to_child;  /*                                       父进程收到停止标志后，向子进程回复确认标志 */
+    int aof_pipe_read_ack_from_parent;/*                                       子进程从父进程读取回复确认标志 */
     int aof_stop_sending_diff;     /* If true stop sending accumulated diffs
                                       to child process.                        如果为true，停止向子进程发送累积的差异。 */
     sds aof_child_diff;             /* AOF diff accumulator child side. */
