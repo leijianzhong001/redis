@@ -2014,10 +2014,11 @@ void checkChildrenDone(void) {
                 (int) server.child_pid);
         } else if (pid == server.child_pid) {
             if (server.child_type == CHILD_TYPE_RDB) {
-                // 【3】 如果子进程是RDB进程，则调用 backgroundSaveDoneHandler 函数。如果rdbji进程处理成功，那么 backgroundSaveDoneHandler 函数会更新父进程的 server.dirty, server.lastbgsave_status, server.lastsave等属性。
+                // 【3】 如果子进程是RDB进程，则调用 backgroundSaveDoneHandler 函数。如果rdb进程处理成功，那么 backgroundSaveDoneHandler 函数会更新父进程的 server.dirty, server.lastbgsave_status, server.lastsave等属性。
                 // 该函数还有一个很重要的操作， 如果rdb数据保存到了磁盘上，则需要将rdb文件发送给正在全量同步的从服务器。
                 backgroundSaveDoneHandler(exitcode, bysignal);
             } else if (server.child_type == CHILD_TYPE_AOF) {
+                // 如果发现子进程是aof进程，
                 backgroundRewriteDoneHandler(exitcode, bysignal);
             } else if (server.child_type == CHILD_TYPE_MODULE) {
                 ModuleForkDoneHandler(exitcode, bysignal);
@@ -2208,7 +2209,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     if (hasActiveChildProcess() || ldbPendingChildren())
     {
         run_with_period(1000) receiveChildInfo();
-        checkChildrenDone();
+        checkChildrenDone(); // 这里执行父进程的收尾工作，主要是将子进程追加增量命令到新aof文件期间产生的新的增量命令写入到新的aof文件。
     } else {
         // 【2】 server.dirty 记录上一次rdb文件生成以后，Redis服务器变更了多少键。如果满足以下条件，则调用 rdbSaveBackground 函数生成rdb文件：
         //      1、满足server.saveparams配置的条件；

@@ -1368,7 +1368,7 @@ struct redisServer {
     int aof_flush_sleep;            /* Micros to sleep before flush. (used by tests) 在flush aof缓冲区的数据到磁盘之前，需要sleep的微妙数*/
     int aof_rewrite_scheduled;      /* Rewrite once BGSAVE terminates.         一旦BGSAVE终止，重写aof文件 */
     list *aof_rewrite_buf_blocks;   /* Hold changes during an AOF rewrite.     在AOF重写期间保持新的数据更改 */
-    sds aof_buf;      /* AOF buffer, written before entering the event loop */
+    sds aof_buf;      /* AOF buffer, written before entering the event loop    AOF缓冲区，在进入事件循环之前写入文件 */
     int aof_fd;       /* File descriptor of currently selected AOF file        当前选择的AOF文件的文件描述符 */
     int aof_selected_db; /* Currently selected DB in AOF */
     time_t aof_flush_postponed_start; /* UNIX time of postponed AOF flush      延迟的AOF刷新的UNIX时间，即在此时间之后，启动一次刷新aof缓冲区内容到磁盘 */
@@ -1377,7 +1377,7 @@ struct redisServer {
     time_t aof_rewrite_time_start;  /* Current AOF rewrite start time. */
     int aof_lastbgrewrite_status;   /* C_OK or C_ERR */
     unsigned long aof_delayed_fsync;  /* delayed AOF fsync() counter */
-    int aof_rewrite_incremental_fsync;/* fsync incrementally while aof rewriting? */
+    int aof_rewrite_incremental_fsync;/* fsync incrementally while aof rewriting? 打开aof的情况下，是否要在rewirte期间fsync数据到磁盘 */
     int rdb_save_incremental_fsync;   /* fsync incrementally while rdb saving? */
     int aof_last_write_status;      /* C_OK or C_ERR                           上一次aof写出状态 */
     int aof_last_write_errno;       /* Valid if aof write/fsync status is ERR */
@@ -1385,7 +1385,7 @@ struct redisServer {
     int aof_use_rdb_preamble;       /* Use RDB preamble on AOF rewrites. */
     redisAtomic int aof_bio_fsync_status; /* Status of AOF fsync in bio job. */
     redisAtomic int aof_bio_fsync_errno;  /* Errno of AOF fsync in bio job. */
-    /* AOF pipes used to communicate between parent and child during rewrite.  在重写期间用于父级和子级之间通信的AOF管道(文件描述符) */
+    /* AOF pipes used to communicate between parent and child during rewrite.  在重写期间用于父级和子级之间通信的AOF管道(文件描述符)， 一条数据管道和两条控制管道，总共6个文件描述符 */
     int aof_pipe_write_data_to_child;  /*                                      父进程向子进程写数据的管道文件描述符 */
     int aof_pipe_read_data_from_parent; /*                                     子进程从父进程读数据的管道文件描述符 */
     int aof_pipe_write_ack_to_parent; /*                                       子进程向父进程发送停止标志，告诉父进程停止写数据的管道 */
@@ -1394,7 +1394,7 @@ struct redisServer {
     int aof_pipe_read_ack_from_parent;/*                                       子进程从父进程读取回复确认标志 */
     int aof_stop_sending_diff;     /* If true stop sending accumulated diffs
                                       to child process.                        如果为true，停止向子进程发送累积的差异。 */
-    sds aof_child_diff;             /* AOF diff accumulator child side. */
+    sds aof_child_diff;             /* AOF diff accumulator child side.        子进程侧保存的的差异数据。主进程将增量数据通过管道发送给子进程后，子进程首先将其存储到 aof_child_diff 中*/
     /* RDB persistence */
     long long dirty;                /* Changes to DB from the last save */
     long long dirty_before_bgsave;  /* Used to restore dirty on failed BGSAVE */
@@ -1428,7 +1428,7 @@ struct redisServer {
                                      * loading aof or rdb. (for testings). negative
                                      * value means fractions of microsecons (on average). */
     /* Pipe and data structures for child -> parent info sharing. */
-    int child_info_pipe[2];         /* Pipe used to write the child_info_data. 用于写入 child_info_data 的管道 */
+    int child_info_pipe[2];         /* Pipe used to write the child_info_data. 用于写入 child_info_data 的管道,这个管道用于父进程从子进程接受一些统计数据，如aof重写期间子进程的统计数据，如cow大小等 */
     int child_info_nread;           /* Num of bytes of the last read from pipe 最后一次从管道中读取的字节数 */
     /* Propagation of commands in AOF / replication */
     redisOpArray also_propagate;    /* Additional command to propagate. */
