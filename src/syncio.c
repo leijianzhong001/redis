@@ -81,7 +81,10 @@ ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout) {
 /* Read the specified amount of bytes from 'fd'. If all the bytes are read
  * within 'timeout' milliseconds the operation succeed and 'size' is returned.
  * Otherwise the operation fails, -1 is returned, and an unspecified amount of
- * data could be read from the file descriptor. */
+ * data could be read from the file descriptor.
+ * 从'fd'读取指定的字节数。
+ * 如果在'timeout'毫秒内读取所有字节，则操作成功并返回'size'。否则操作失败，返回-1，并且可以从文件描述符中读取未指定数量的数据
+ * */
 ssize_t syncRead(int fd, char *ptr, ssize_t size, long long timeout) {
     ssize_t nread, totread = 0;
     long long start = mstime();
@@ -121,7 +124,12 @@ ssize_t syncRead(int fd, char *ptr, ssize_t size, long long timeout) {
  * milliseconds to be read.
  *
  * On success the number of bytes read is returned, otherwise -1.
- * On success the string is always correctly terminated with a 0 byte. */
+ * On success the string is always correctly terminated with a 0 byte.
+ * 读取一行，确保每个字符的读取时间不会超过'timeout'毫秒。
+ *
+ * 如果成功，则返回读取的字节数，否则返回-1。
+ * 如果成功，字符串总是正确地以 '\0' 字节结束
+ * */
 ssize_t syncReadLine(int fd, char *ptr, ssize_t size, long long timeout) {
     ssize_t nread = 0;
 
@@ -129,6 +137,7 @@ ssize_t syncReadLine(int fd, char *ptr, ssize_t size, long long timeout) {
     while(size) {
         char c;
 
+        // 逐个字节读取数据，直到碰到换行符
         if (syncRead(fd,&c,1,timeout) == -1) return -1;
         if (c == '\n') {
             *ptr = '\0';

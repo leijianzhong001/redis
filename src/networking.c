@@ -1035,7 +1035,10 @@ void AddReplyFromClient(client *dst, client *src) {
 
 /* Copy 'src' client output buffers into 'dst' client output buffers.
  * The function takes care of freeing the old output buffers of the
- * destination client. */
+ * destination client.
+ *
+ * 复制'src'客户端输出缓冲区到'dst'客户端输出缓冲区，包括固定输出缓冲区和动态输出缓冲区。该函数还负责释放 dst client 的旧输出缓冲区。
+ * */
 void copyClientOutputBuffer(client *dst, client *src) {
     listRelease(dst->reply);
     dst->sentlen = 0;
@@ -1419,7 +1422,7 @@ void freeClient(client *c) {
      * we may call replicationCacheMaster() and the client should already
      * be removed from the list of clients to free.
      *
-     * 如果这个客户端被安排为异步释放，我们需要从队列中删除它。注意，我们需要在这里这样做，因为稍后我们可能会调用replicationCacheMaster()，并且客户端应该已经从客户端列表中删除以释放。
+     * 如果这个客户端被安排为异步释放，我们需要从队列中删除它。注意，我们需要在这里这样做，因为稍后我们可能会调用 replicationCacheMaster()，并且客户端应该已经从客户端列表中删除以释放。
      * */
     if (c->flags & CLIENT_CLOSE_ASAP) {
         ln = listSearchKey(server.clients_to_close,c);
@@ -1432,7 +1435,7 @@ void freeClient(client *c) {
      *
      * Note that before doing this we make sure that the client is not in
      * some unexpected state, by checking its flags. */
-    // 如果客户端是一个redis master节点（说明是当前节点的主节点），则缓存该客户端信息，并将主从状态置为待连接状态，以便后续与主节点重新建立连接。
+    // 如果客户端是一个 redis master节点（说明是当前节点的主节点），则缓存该客户端信息，并将主从状态置为待连接状态，以便后续与主节点重新建立连接。
     if (server.master && c->flags & CLIENT_MASTER) {
         serverLog(LL_WARNING,"Connection with master lost.");
         if (!(c->flags & (CLIENT_PROTOCOL_ERROR|CLIENT_BLOCKED))) {
@@ -1460,7 +1463,7 @@ void freeClient(client *c) {
     if (c->flags & CLIENT_BLOCKED) unblockClient(c);
     dictRelease(c->bpop.keys);
 
-    /* UNWATCH all the keys */
+    /* UNWATCH all the keys 取消监视的所有key */
     unwatchAllKeys(c);
     listRelease(c->watched_keys);
 
@@ -1531,6 +1534,7 @@ void freeClient(client *c) {
 
     /* Master/slave cleanup Case 2:
      * we lost the connection with the master.
+     *
      * 失去与master客户端的连接时， 尝试再次连接主客户端
      * */
     if (c->flags & CLIENT_MASTER) replicationHandleMasterDisconnection();
@@ -1627,7 +1631,12 @@ client *lookupClientByID(uint64_t id) {
  *
  * This function is called by threads, but always with handler_installed
  * set to 0. So when handler_installed is set to 0 the function must be
- * thread safe. */
+ * thread safe.
+ * 将输出缓冲区中的数据写入客户端。
+ * 如果客户端在调用后仍然有效，则返回C_OK，如果由于某些错误而释放，则返回C_ERR。
+ * 如果设置了handler_installed，它将尝试清除写事件。
+ * 这个函数由线程调用，但总是将 handler_installed 设置为0。因此，当 handler_installed 设置为0时，该函数必须是线程安全的
+ * */
 int writeToClient(client *c, int handler_installed) {
     /* Update total number of writes on server */
     atomicIncr(server.stat_total_writes_processed, 1);
@@ -2523,6 +2532,7 @@ char *getClientSockname(client *c) {
 sds catClientInfoString(sds s, client *client) {
     char flags[16], events[3], conninfo[CONN_INFO_LEN], *p;
 
+    // 这里在确定客户端信息中的客户端标识
     p = flags;
     if (client->flags & CLIENT_SLAVE) {
         if (client->flags & CLIENT_MONITOR)

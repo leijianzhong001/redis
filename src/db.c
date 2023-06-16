@@ -424,7 +424,13 @@ long long emptyDbStructure(redisDb *dbarray, int dbnum, int async,
  *
  * On success the function returns the number of keys removed from the
  * database(s). Otherwise -1 is returned in the specific case the
- * DB number is out of range, and errno is set to EINVAL. */
+ * DB number is out of range, and errno is set to EINVAL.
+ *
+ * 从Redis服务器的所有数据库中删除所有键。 如果给出了callback，则会不时调用该函数以表示工作正在进行中。
+ * 如果需要flush所有的数据库，dbnum可以是-1;如果只需要刷新一个Redis数据库，dbnum可以是指定的DB号。
+ * Flags 是 EMPTYDB_NO_FLAGS，如果没有指定特殊标志，或者 EMPTYDB_ASYNC，如果我们希望在不同的线程中释放内存，并且函数尽快返回。
+ * 如果成功，该函数将返回从数据库中删除的键数。否则在DB号超出范围的特定情况下返回-1, errno被设置为EINVAL。
+ * */
 long long emptyDb(int dbnum, int flags, void(callback)(void*)) {
     int async = (flags & EMPTYDB_ASYNC);
     RedisModuleFlushInfoV1 fi = {REDISMODULE_FLUSHINFO_VERSION,!async,dbnum};

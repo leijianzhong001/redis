@@ -2295,7 +2295,12 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      * detect transfer failures, start background RDB transfers and so forth. 
      * 
      * If Redis is trying to failover then run the replication cron faster so
-     * progress on the handshake happens more quickly. */
+     * progress on the handshake happens more quickly.
+     *
+     * Replication cron 函数 —— 用于重新连接到主服务器，检测传输失败，启动后台RDB传输等。
+     * 如果Redis正在尝试故障转移，那么可以更快地运行Replication cron，以便更快地进行握手。
+     * 主从复制相关的定时事件
+     * */
     if (server.failover_state != NO_FAILOVER) {
         run_with_period(100) replicationCron();
     } else {
@@ -2955,6 +2960,14 @@ static void readOOMScoreAdj(void) {
  *
  * A process_class value of -1 implies OOM_CONFIG_MASTER or OOM_CONFIG_REPLICA,
  * depending on current role.
+ *
+ * OOM killer会在可用内存不足时选择性地杀掉用户进程，它的运行规则 是怎样的，会选择哪些用户进程“下手”呢？
+ * OOM killer进程会为每个用户进 程设置一个权值，这个权值越高，被“下手”的概率就越高，反之概率越低。 每个进程的权值存放在/proc/{progress_id}/oom_score中，
+ * 这个值是受/proc/{progress_id}/oom_adj的控制，oom_adj在不同的Linux版本中最小值不同，可以参考Linux源码中oom.h（从-15到-17）。当oom_adj设置为最小值时，该进程将不会被OOM killer杀掉，设置方法如下。
+ * echo {value} > /proc/${process_id}/oom_adj
+ *
+ * 笔者认为oom_adj参数只能起到辅助作用，合理地规划内存更为重要。
+ * 通常在高可用情况下，被杀掉比僵死更好，因此不要过多依赖 oom_adj 配置。
  */
 int setOOMScoreAdj(int process_class) {
 

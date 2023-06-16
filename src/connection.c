@@ -265,6 +265,7 @@ static void connSocketEventHandler(struct aeEventLoop *el, int fd, void *clientD
     UNUSED(fd);
     connection *conn = clientData;
 
+    // 调用网络连接建立的回调函数
     if (conn->state == CONN_STATE_CONNECTING &&
             (mask & AE_WRITABLE) && conn->conn_handler) {
 

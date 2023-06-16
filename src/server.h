@@ -283,7 +283,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
                                            currently, turned on inside MULTI, Lua, RM_Call,
                                            and AOF client */
 #define CLIENT_REPL_RDBONLY (1ULL<<42) /* This client is a replica that only wants
-                                          RDB without replication buffer. */
+                                          RDB without replication buffer.      这个客户端是一个副本，只需要RDB而不需要复制缓冲区 */
 
 /* Client block type (btype field in client structure)
  * if CLIENT_BLOCKED flag is set. */
@@ -312,23 +312,25 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
                                     three: normal, slave, pubsub. */
 
 /* Slave replication state. Used in server.repl_state for slaves to remember
- * what to do next. */
+ * what to do next.
+ * 注意，下面的状态都是从节点上的
+ * */
 typedef enum {
-    REPL_STATE_NONE = 0,            /* No active replication */
-    REPL_STATE_CONNECT,             /* Must connect to master */
-    REPL_STATE_CONNECTING,          /* Connecting to master */
+    REPL_STATE_NONE = 0,            /* No active replication                   无主从复制关系 */
+    REPL_STATE_CONNECT,             /* Must connect to master                  待连接状态 */
+    REPL_STATE_CONNECTING,          /* Connecting to master                    正在连接到主节点 */
     /* --- Handshake states, must be ordered --- */
-    REPL_STATE_RECEIVE_PING_REPLY,  /* Wait for PING reply */
-    REPL_STATE_SEND_HANDSHAKE,      /* Send handshake sequance to master */
-    REPL_STATE_RECEIVE_AUTH_REPLY,  /* Wait for AUTH reply */
-    REPL_STATE_RECEIVE_PORT_REPLY,  /* Wait for REPLCONF reply */
-    REPL_STATE_RECEIVE_IP_REPLY,    /* Wait for REPLCONF reply */
-    REPL_STATE_RECEIVE_CAPA_REPLY,  /* Wait for REPLCONF reply */
-    REPL_STATE_SEND_PSYNC,          /* Send PSYNC */
-    REPL_STATE_RECEIVE_PSYNC_REPLY, /* Wait for PSYNC reply */
+    REPL_STATE_RECEIVE_PING_REPLY,  /* Wait for PING reply                     已发送ping命令， 等待ping回复 */
+    REPL_STATE_SEND_HANDSHAKE,      /* Send handshake sequance to master       成功收到主节点pong响应，开始发送握手序列到master */
+    REPL_STATE_RECEIVE_AUTH_REPLY,  /* Wait for AUTH reply                     等待发往主节点的auth命令结果，如果主节点设置了requirepass参数，则需要密码验证，从节点必须配置masterauth参数保证与主节点相同的密码才能通过验证 */
+    REPL_STATE_RECEIVE_PORT_REPLY,  /* Wait for REPLCONF reply                 已发送 REPLCONF listening-port 命令，等待响应结果 */
+    REPL_STATE_RECEIVE_IP_REPLY,    /* Wait for REPLCONF reply                 已发送 REPLCONF ip-address 命令，等待响应结果 */
+    REPL_STATE_RECEIVE_CAPA_REPLY,  /* Wait for REPLCONF reply                 已发送 REPLCONF capa 命令，等待响应结果 */
+    REPL_STATE_SEND_PSYNC,          /* Send PSYNC                              握手阶段已完成，将要发送 PSYNC 命令 */
+    REPL_STATE_RECEIVE_PSYNC_REPLY, /* Wait for PSYNC reply                    PSYNC 已发送，等待 PSYNC 响应结果 */
     /* --- End of handshake states --- */
-    REPL_STATE_TRANSFER,        /* Receiving .rdb from master */
-    REPL_STATE_CONNECTED,       /* Connected to master */
+    REPL_STATE_TRANSFER,        /* Receiving .rdb from master                  从节点正在从主节点接收RDB数据 */
+    REPL_STATE_CONNECTED,       /* Connected to master                         已连接，主从同步完成 */
 } repl_state;
 
 /* The state of an in progress coordinated failover */
@@ -343,10 +345,10 @@ typedef enum {
  * In SEND_BULK and ONLINE state the slave receives new updates
  * in its output queue. In the WAIT_BGSAVE states instead the server is waiting
  * to start the next background saving in order to send updates to it. */
-#define SLAVE_STATE_WAIT_BGSAVE_START 6 /* We need to produce a new RDB file. */
-#define SLAVE_STATE_WAIT_BGSAVE_END 7 /* Waiting RDB file creation to finish. */
-#define SLAVE_STATE_SEND_BULK 8 /* Sending RDB file to slave. */
-#define SLAVE_STATE_ONLINE 9 /* RDB file transmitted, sending just updates. */
+#define SLAVE_STATE_WAIT_BGSAVE_START 6 /* We need to produce a new RDB file.  等待生成rdb数据的操作开始，用于全量同步 */
+#define SLAVE_STATE_WAIT_BGSAVE_END 7 /* Waiting RDB file creation to finish.  等待生成rdb数据的操作结束，用于全量同步 */
+#define SLAVE_STATE_SEND_BULK 8 /* Sending RDB file to slave.                  正在发送RDB数据，用于全量同步 */
+#define SLAVE_STATE_ONLINE 9 /* RDB file transmitted, sending just updates.    同步完成，从节点在线 */
 
 /* Slave capabilities. */
 #define SLAVE_CAPA_NONE 0
@@ -898,20 +900,20 @@ typedef struct client {
     time_t obuf_soft_limit_reached_time;
     uint64_t flags;         /* Client flags: CLIENT_* macros.                  客户端标志 */
     int authenticated;      /* Needed when the default user requires auth. */
-    int replstate;          /* Replication state if this is a slave. */
+    int replstate;          /* Replication state if this is a slave.           记录当前节点视角下的从节点的复制状态，具体请查看 SLAVE_STATE_* 枚举 */
     int repl_put_online_on_ack; /* Install slave write handler on first ACK. */
     int repldbfd;           /* Replication DB file descriptor. */
     off_t repldboff;        /* Replication DB file offset. */
     off_t repldbsize;       /* Replication DB file size. */
     sds replpreamble;       /* Replication DB preamble. */
     long long read_reploff; /* Read replication offset if this is a master.    当前节点已从该主节点上读取的复制偏移量，这个偏移量会在每次读到主节点请求时累加 */
-    long long reploff;      /* Applied replication offset if this is a master. 当前节点已从该主节点成功复制的复制偏移量 */
+    long long reploff;      /* Applied replication offset if this is a master. 当前节点已从该主节点成功复制的复制偏移量， 对应从节点 info replication 中的 slave_repl_offset */
     long long repl_ack_off; /* Replication ack offset, if this is a slave.     当前主节点已经收到的该从节点上被确认的复制偏移量 */
     long long repl_ack_time;/* Replication ack time, if this is a slave. */
     long long repl_last_partial_write; /* The last time the server did a partial write from the RDB child pipe to this replica  */
     long long psync_initial_offset; /* FULLRESYNC reply offset other slaves
                                        copying this slave output buffer
-                                       should use. */
+                                       should use.                             FULLRESYNC 应答时给从节点回复的当前偏移量。 这个字段会在其他从服务器复用当前slave生成的rdb时使用，因为既然复用了rdb，那么存储在从客户端输出缓冲区新生成的写入命令也应该被复用 */
     char replid[CONFIG_RUN_ID_SIZE+1]; /* Master replication ID (if master). */
     int slave_listening_port; /* As configured with: REPLCONF listening-port */
     char *slave_addr;       /* Optionally given by REPLCONF ip-address */
@@ -1101,13 +1103,18 @@ struct redisMemOverhead {
  * Currently the only use is to select a DB at load time, useful in
  * replication in order to make sure that chained slaves (slaves of slaves)
  * select the correct DB and are able to accept the stream coming from the
- * top-level master. */
+ * top-level master.
+ *
+ * 通过将元数据存储和加载到RDB文件中，可以选择将此结构传递给 RDB save/load 函数，以实现其他功能。
+ *
+ * 目前唯一的用途是在加载时选择一个DB，这在复制中很有用，以确保链接的从服务器(从服务器的从服务器)选择正确的DB，并能够接受来自顶层master的流。
+ * */
 typedef struct rdbSaveInfo {
     /* Used saving and loading. */
     int repl_stream_db;  /* DB to select in server.master client.              server.master选中的库，其实就是执行命令时的当前库 */
 
     /* Used only loading. */
-    int repl_id_is_set;  /* True if repl_id field is set.                      repl_id是否被设置 */
+    int repl_id_is_set;  /* True if repl_id field is set.                      repl_id 是否被设置 */
     char repl_id[CONFIG_RUN_ID_SIZE+1];     /* Replication ID.                 repl_id 字符串 */
     long long repl_offset;                  /* Replication offset.             复制偏移量 */
 } rdbSaveInfo;
@@ -1237,7 +1244,7 @@ struct redisServer {
     list *clients_to_close;     /* Clients to close asynchronously */
     list *clients_pending_write; /* There is to write or install handler. */
     list *clients_pending_read;  /* Client has pending read socket buffers. */
-    list *slaves, *monitors;    /* List of slaves and MONITORs */
+    list *slaves, *monitors;    /* List of slaves and MONITORs                 slaves为从节点客户端列表，记录当前服务器下所有的从节点客户端 */
     client *current_client;     /* Current client executing the command. */
     rax *clients_timeout_table; /* Radix tree for blocked clients timeouts. */
     long fixed_time_expire;     /* If > 0, expire keys against server.mstime. */
@@ -1404,7 +1411,7 @@ struct redisServer {
     int rdb_compression;            /* Use compression in RDB? */
     int rdb_checksum;               /* Use RDB checksum? */
     int rdb_del_sync_files;         /* Remove RDB files used only for SYNC if
-                                       the instance does not use persistence. */
+                                       the instance does not use persistence.  如果实例不使用持久化，则删除仅用于SYNC的RDB文件。 */
     time_t lastsave;                /* Unix time of last successful save */
     time_t lastbgsave_try;          /* Unix time of last attempted bgsave */
     time_t rdb_save_time_last;      /* Time used by last RDB save run. */
@@ -1444,13 +1451,13 @@ struct redisServer {
     int use_exit_on_panic;          /* Use exit() on panic and assert rather than
                                      * abort(). useful for Valgrind. */
     /* Replication (master) */
-    char replid[CONFIG_RUN_ID_SIZE+1];  /* My current replication ID. */
-    char replid2[CONFIG_RUN_ID_SIZE+1]; /* replid inherited from master*/
-    long long master_repl_offset;   /* My current replication offset           表示当前主节点的复制偏移量 */
-    long long second_replid_offset; /* Accept offsets up to this for replid2. */
+    char replid[CONFIG_RUN_ID_SIZE+1];  /* My current replication ID.          40位16进制随机字符窜，在主节点中是自身复制id, 在从节点中记录的是主节点的复制id。 这个值对应的是 info replication 中的 master_replid 项（无论主节点还是从节点的info中都有该项，从节点的值从主节点继承而来） */
+    char replid2[CONFIG_RUN_ID_SIZE+1]; /* replid inherited from master        次级复制id. 用于主节点， 存放上一个主节点的复制id。 这个值对应的是节点 info replication 中的 master_replid2 项 （无论主节点还是从节点的info中都有该项，从节点的值从主节点继承而来）*/
+    long long master_repl_offset;   /* My current replication offset           表示当前主节点记录的已执行的写命令的偏移量。 这个值对应的是节点 info replication 中的 master_repl_offset 项 */
+    long long second_replid_offset; /* Accept offsets up to this for replid2.  这个值对应的是 master 节点 info replication 中的 second_repl_offset 项 */
     int slaveseldb;                 /* Last SELECTed DB in replication output  最后一次复制输出中选择的DB */
     int repl_ping_slave_period;     /* Master pings the slave every N seconds */
-    char *repl_backlog;             /* Replication backlog for partial syncs   复制积压缓冲区 */
+    char *repl_backlog;             /* Replication backlog for partial syncs   复制积压缓冲区。主节点将最近执行的写命令写入复制积压缓冲区， 用于实现部分同步 */
     long long repl_backlog_size;    /* Backlog circular buffer size            复制积压缓冲区大小 */
     long long repl_backlog_histlen; /* Backlog actual data length              复制积压缓冲区已保存数据的有效长度。根据统计指标，可算出复制积压缓冲区内的可用偏移量范围： [repl_backlog_first_byte_offset, repl_backlog_first_byte_offset+repl_backlog_histlen]。 */
     long long repl_backlog_idx;     /* Backlog circular buffer current offset,
@@ -1466,7 +1473,7 @@ struct redisServer {
     int repl_good_slaves_count;     /* Number of slaves with lag <= max_lag. */
     int repl_diskless_sync;         /* Master send RDB to slaves sockets directly. */
     int repl_diskless_load;         /* Slave parse RDB directly from the socket.
-                                     * see REPL_DISKLESS_LOAD_* enum */
+                                     * see REPL_DISKLESS_LOAD_* enum           Slave直接从套接字解析RDB */
     int repl_diskless_sync_delay;   /* Delay to start a diskless repl BGSAVE. */
     /* Replication (slave) */
     char *masteruser;               /* AUTH with this user and masterauth with master */
@@ -1475,14 +1482,14 @@ struct redisServer {
     int masterport;                 /* Port of master */
     int repl_timeout;               /* Timeout after N seconds of master idle */
     client *master;     /* Client that is master for this slave                从节点的主节点客户端 */
-    client *cached_master; /* Cached master to be reused for PSYNC. */
+    client *cached_master; /* Cached master to be reused for PSYNC.            为 psync 缓存的用来重用的主节点客户端。 当主从节点之间的连接断开时，从节点会将主节点的信息缓存在 cached_master 中，以支持重新连接之后的部分重同步 */
     int repl_syncio_timeout; /* Timeout for synchronous I/O calls */
-    int repl_state;          /* Replication status if the instance is a slave */
-    off_t repl_transfer_size; /* Size of RDB to read from master during sync. */
-    off_t repl_transfer_read; /* Amount of RDB read from master during sync. */
-    off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */
-    connection *repl_transfer_s;     /* Slave -> Master SYNC connection */
-    int repl_transfer_fd;    /* Slave -> Master SYNC temp file descriptor */
+    int repl_state;          /* Replication status if the instance is a slave  用于从节点，标志从节点当前的复制状态 */
+    off_t repl_transfer_size; /* Size of RDB to read from master during sync.  同步期间从master读取的RDB大小。 */
+    off_t repl_transfer_read; /* Amount of RDB read from master during sync.   同步期间从主数据库已读取的RDB数量 */
+    off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time.  上次fsync完成时的偏移量 */
+    connection *repl_transfer_s;     /* Slave -> Master SYNC connection        从节点上用于接收主节点数据（RDB或者命令）的连接 */
+    int repl_transfer_fd;    /* Slave -> Master SYNC temp file descriptor      从节点从master接收rdb数据的临时文件的文件描述符，这个文件描述符在确定全量同步时创建 */
     char *repl_transfer_tmpfile; /* Slave-> master SYNC temp file name */
     time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
     int repl_serve_stale_data; /* Serve stale data when link is down? */
@@ -1492,13 +1499,16 @@ struct redisServer {
     int repl_disable_tcp_nodelay;   /* Disable TCP_NODELAY after SYNC? */
     int slave_priority;             /* Reported in INFO and used by Sentinel. */
     int replica_announced;          /* If true, replica is announced by Sentinel */
-    int slave_announce_port;        /* Give the master this listening port. */
-    char *slave_announce_ip;        /* Give the master this ip address. */
+    int slave_announce_port;        /* Give the master this listening port.    从节点对外发布的自己的端口 */
+    char *slave_announce_ip;        /* Give the master this ip address.        从节点对外发布的自己的ip */
     /* The following two fields is where we store master PSYNC replid/offset
      * while the PSYNC is in progress. At the end we'll copy the fields into
-     * the server->master client structure. */
-    char master_replid[CONFIG_RUN_ID_SIZE+1];  /* Master PSYNC runid. */
-    long long master_initial_offset;           /* Master PSYNC offset. */
+     * the server->master client structure.
+     *
+     * 下面两个字段是我们在PSYNC进行时存储主 PSYNC replid/offset 的地方。最后，我们将把这两个字段复制到 server->master 的client结构体中
+     * */
+    char master_replid[CONFIG_RUN_ID_SIZE+1];  /* Master PSYNC runid.          发起psync时使用的 主节点的 runid */
+    long long master_initial_offset;           /* Master PSYNC offset.         向主节点发起psync请求时的 offset */
     int repl_slave_lazy_flush;          /* Lazy FLUSHALL before loading DB? */
     /* Replication script cache. */
     dict *repl_scriptcache_dict;        /* SHA1 all slaves are aware of. */

@@ -2593,6 +2593,7 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
 
 /* Load an RDB file from the rio stream 'rdb'. On success C_OK is returned,
  * otherwise C_ERR is returned and 'errno' is set accordingly.
+ *
  * 从rio流' RDB '加载RDB文件。如果成功，则返回C_OK，否则返回C_ERR并相应地设置'errno'
  * */
 int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
@@ -2957,9 +2958,14 @@ int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags) {
 }
 
 /* A background saving child (BGSAVE) terminated its work. Handle this.
- * This function covers the case of actual BGSAVEs. */
+ * This function covers the case of actual BGSAVEs.
+ * 一个BGSAVE终止了它的工作。处理这个问题，这个函数涵盖了实际bgsave的所有情况。
+ *
+ * 这个函数会在rdb进程结束之后，更新相关的状态和统计信息，如server.dirty，server.lastsave，server.lastbgsave_status
+ * */
 static void backgroundSaveDoneHandlerDisk(int exitcode, int bysignal) {
     if (!bysignal && exitcode == 0) {
+        // 非kill信号结束并且正常退出
         serverLog(LL_NOTICE,
             "Background saving terminated with success");
         server.dirty = server.dirty - server.dirty_before_bgsave;
@@ -3012,7 +3018,10 @@ static void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
     server.rdb_pipe_bufflen = 0;
 }
 
-/* When a background RDB saving/transfer terminates, call the right handler. */
+/* When a background RDB saving/transfer terminates, call the right handler.
+ *
+ * 当子进程成功生成rdb文件时，调用该函数将rdb数据传输给从节点
+ * */
 void backgroundSaveDoneHandler(int exitcode, int bysignal) {
     int type = server.rdb_child_type;
     switch(server.rdb_child_type) {
@@ -3031,7 +3040,9 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
     server.rdb_save_time_last = time(NULL)-server.rdb_save_time_start;
     server.rdb_save_time_start = -1;
     /* Possibly there are slaves waiting for a BGSAVE in order to be served
-     * (the first stage of SYNC is a bulk transfer of dump.rdb) */
+     * (the first stage of SYNC is a bulk transfer of dump.rdb)
+     * 可能有从机在等待BGSAVE以便提供服务(SYNC的第一阶段是dump.rdb的批量传输)。
+     * */
     updateSlavesWaitingBgsave((!bysignal && exitcode == 0) ? C_OK : C_ERR, type);
 }
 
@@ -3225,7 +3236,13 @@ void bgsaveCommand(client *c) {
  * that is normally stack-allocated in the caller, returns the populated
  * pointer if the instance has a valid master client, otherwise NULL
  * is returned, and the RDB saving will not persist any replication related
- * information. */
+ * information.
+ *
+ * 填充rdbSaveInfo结构，用于在RDB文件中持久化复制信息。 目前，该结构明确地只包含当前从主流中选择的DB。
+ *
+ * 另外，如果rdbSave*() 族函数接收到一个NULL rsi结构，那么 Replication ID/offset 也不会被保存。
+ * 该函数填充通常在调用方中堆栈分配的'rsi'，如果实例具有有效的主客户端，则返回填充的指针，否则返回NULL，并且RDB保存不会保存任何与复制相关的信息。
+ * */
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
     rdbSaveInfo rsi_init = RDB_SAVE_INFO_INIT;
     *rsi = rsi_init;
@@ -3237,6 +3254,7 @@ rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
      * connects to us, the NULL repl_backlog will trigger a full
      * synchronization, at the same time we will use a new replid and clear
      * replid2.
+     *
      * 如果实例是主实例，我们只能在 repl_backlog 不为NULL时填充复制信息。
      * 如果repl_backlog为NULL，则意味着该实例不在任何复制链中。在这种情况下，复制信息是无用的，因为当一个slave连接到我们时，NULL repl_backlog 将触发完全同步，同时我们将使用一个新的replid并清除replid2。
      * */

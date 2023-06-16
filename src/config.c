@@ -531,7 +531,7 @@ void loadServerConfigFromString(char *config) {
             if (server.masterport < 0 || server.masterport > 65535 || *ptr != '\0') {
                 err = "Invalid master port"; goto loaderr;
             }
-            server.repl_state = REPL_STATE_CONNECT;
+            server.repl_state = REPL_STATE_CONNECT; // 将连接状态置为待连接，之后会在定时任务中尝试连接到指定的主节点
         } else if (!strcasecmp(argv[0],"list-max-ziplist-entries") && argc == 2){
             /* DEAD OPTION */
         } else if (!strcasecmp(argv[0],"list-max-ziplist-value") && argc == 2) {

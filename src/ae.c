@@ -296,7 +296,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
     aeTimeEvent *te;
     long long maxId;
 
-    // 【1】 遍历时间事件表，但事实上redis只有一个时间事件
+    // 【1】 遍历时间事件表，但事实上 redis 只有一个时间事件
     te = eventLoop->timeEventHead;
     maxId = eventLoop->timeEventNextId-1;
     monotime now = getMonotonicUs();
@@ -411,7 +411,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
         int j;
         /**
          * 【2】 按照以下规则计算进程最大阻塞时间
-         *      1、查找最先执行的时间事件， 如果能找到，则将该事件执行时间减去当前时间作为进程的最大阻塞时间，这意味着我们在阻塞这么长事件以后，刚好可以执行时间事件了；
+         *      1、查找最先执行的时间事件， 如果能找到，则将该事件执行时间减去当前时间作为进程的最大阻塞时间，这意味着我们在阻塞这么长时间以后，刚好可以执行时间事件了；
          *      2、找不到时间事件， 检查flags参数中是否有 AE_DONT_WAIT 标志， 若不存在，则进程将一直阻塞，直到有文件事件就绪；若存在，
          *      则进程不阻塞，将不断的询问系统是否有已就绪的文件事件。另外，如果eventLoop.flags中存在 AE_DONT_WAIT , 那么进程也不会阻塞
          */
@@ -531,7 +531,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
     }
     /* Check time events */
     if (flags & AE_TIME_EVENTS)
-        // 处理时间时间
+        // 处理时间事件，redis只有一个时间时间，该事件对应的回调函数就是 serverCron
         processed += processTimeEvents(eventLoop);
 
     return processed; /* return the number of processed file/time events */
