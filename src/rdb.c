@@ -1480,7 +1480,10 @@ werr:
  *
  * While the suffix is the 40 bytes hex string we announced in the prefix.
  * This way processes receiving the payload can understand when it ends
- * without doing any processing of the content. */
+ * without doing any processing of the content.
+ *
+ * 当前函数用于在无盘复制的情况下生成并写出rdb数据到目标
+ * */
 int rdbSaveRioWithEOFMark(rio *rdb, int *error, rdbSaveInfo *rsi) {
     char eofmark[RDB_EOF_MARK_SIZE];
 
@@ -1490,6 +1493,7 @@ int rdbSaveRioWithEOFMark(rio *rdb, int *error, rdbSaveInfo *rsi) {
     if (rioWrite(rdb,"$EOF:",5) == 0) goto werr;
     if (rioWrite(rdb,eofmark,RDB_EOF_MARK_SIZE) == 0) goto werr;
     if (rioWrite(rdb,"\r\n",2) == 0) goto werr;
+    // 【1】 子进程在这里阻塞式的写入rdb数据到父进程的匿名管道中
     if (rdbSaveRio(rdb,error,RDBFLAGS_NONE,rsi) == C_ERR) goto werr;
     if (rioWrite(rdb,eofmark,RDB_EOF_MARK_SIZE) == 0) goto werr;
     stopSaving(1);
@@ -3060,7 +3064,11 @@ void killRDBChild(void) {
 }
 
 /* Spawn an RDB child that writes the RDB to the sockets of the slaves
- * that are currently in SLAVE_STATE_WAIT_BGSAVE_START state. */
+ * that are currently in SLAVE_STATE_WAIT_BGSAVE_START state.
+ *
+ * 生成一个RDB子进程，将RDB写入当前处于 SLAVE_STATE_WAIT_BGSAVE_START 状态的从客户端的套接字。
+ * 无盘复制的情况下，先fork出一个子进程，由生成rdb格式的数据，然后子进程通过管道将rdb数据先传输给父进程，父进程再将数据发送给网络套接字
+ * */
 int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
     listNode *ln;
     listIter li;
@@ -3076,14 +3084,19 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
     /* Before to fork, create a pipe that is used to transfer the rdb bytes to
      * the parent, we can't let it write directly to the sockets, since in case
      * of TLS we must let the parent handle a continuous TLS state when the
-     * child terminates and parent takes over. */
+     * child terminates and parent takes over.
+     *
+     * 在fork子进程之前，创建一个用于将rdb字节传输到父进程的管道，我们不能让它直接写入套接字，因为在TLS的情况下，我们必须让父进程在子进程终止以及父进程接管时处理连续的TLS状态。
+     * */
     if (pipe(pipefds) == -1) return C_ERR;
-    server.rdb_pipe_read = pipefds[0]; /* read end */
-    rdb_pipe_write = pipefds[1]; /* write end */
+    server.rdb_pipe_read = pipefds[0]; /* read end 父进程读数据管道 */
+    rdb_pipe_write = pipefds[1]; /* write end      子进程写数据管道 */
     anetNonBlock(NULL, server.rdb_pipe_read);
 
     /* create another pipe that is used by the parent to signal to the child
-     * that it can exit. */
+     * that it can exit.
+     * 创建另一个管道，父进程使用该管道向子进程发出它可以退出的信号
+     * */
     if (pipe(pipefds) == -1) {
         close(rdb_pipe_write);
         close(server.rdb_pipe_read);
@@ -3093,7 +3106,10 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
     server.rdb_child_exit_pipe = pipefds[1]; /* write end */
 
     /* Collect the connections of the replicas we want to transfer
-     * the RDB to, which are i WAIT_BGSAVE_START state. */
+     * the RDB to, which are i WAIT_BGSAVE_START state.
+     *
+     * 收集我们希望将RDB传输到的slave的connection上，这些副本的状态为 WAIT_BGSAVE_START。
+     * */
     server.rdb_pipe_conns = zmalloc(sizeof(connection *)*listLength(server.slaves));
     server.rdb_pipe_numconns = 0;
     server.rdb_pipe_numconns_writing = 0;
@@ -3102,40 +3118,48 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
         client *slave = ln->value;
         if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_START) {
             server.rdb_pipe_conns[server.rdb_pipe_numconns++] = slave->conn;
+            // 发送一个 +FULLRESYNC 响应，并设置从客户端的复制状态进入 SLAVE_STATE_WAIT_BGSAVE_END
             replicationSetupSlaveForFullResync(slave,getPsyncInitialOffset());
         }
     }
 
+    // 【1】 fork出一个子进程来生成rdb文件
     /* Create the child process. */
     if ((childpid = redisFork(CHILD_TYPE_RDB)) == 0) {
-        /* Child */
+        /* Child 子进程执行代码 */
         int retval, dummy;
         rio rdb;
 
+        // 一定要注意这里，这里将匿名管道 rdb_pipe_write 作为写出目标，实际上最终是将数据写出给父节进程了
         rioInitWithFd(&rdb,rdb_pipe_write);
 
         redisSetProcTitle("redis-rdb-to-slaves");
         redisSetCpuAffinity(server.bgsave_cpulist);
 
+        // 【2】 使用 $EOF:<delimiter>\r\n<rdb><delimiter> 的格式生成 rdb 数据并发送给父进程
         retval = rdbSaveRioWithEOFMark(&rdb,NULL,rsi);
         if (retval == C_OK && rioFlush(&rdb) == 0)
             retval = C_ERR;
 
         if (retval == C_OK) {
+            // 发送一些 COW 统计数据到父进程
             sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
         }
 
         rioFreeFd(&rdb);
         /* wake up the reader, tell it we're done. */
         close(rdb_pipe_write);
-        close(server.rdb_child_exit_pipe); /* close write end so that we can detect the close on the parent. */
+        close(server.rdb_child_exit_pipe); /* close write end so that we can detect the close on the parent. 关闭写端，以便我们可以检测父进程的关闭 */
         /* hold exit until the parent tells us it's safe. we're not expecting
-         * to read anything, just get the error when the pipe is closed. */
+         * to read anything, just get the error when the pipe is closed.
+         *
+         * 阻塞直到父进程告诉我们可以安全退出为止。我们不期望读取任何东西，只是获取管道关闭时的错误。
+         * */
         dummy = read(safe_to_exit_pipe, pipefds, 1);
         UNUSED(dummy);
         exitFromChild((retval == C_OK) ? 0 : 1);
     } else {
-        /* Parent */
+        /* Parent 父进程执行代码 */
         close(safe_to_exit_pipe);
         if (childpid == -1) {
             serverLog(LL_WARNING,"Can't save in background: fork: %s",
@@ -3163,6 +3187,7 @@ int rdbSaveToSlavesSockets(rdbSaveInfo *rsi) {
             server.rdb_save_time_start = time(NULL);
             server.rdb_child_type = RDB_CHILD_TYPE_SOCKET;
             close(rdb_pipe_write); /* close write in parent so that it can detect the close on the child. */
+            //【2】 为匿名管道 server.rdb_pipe_read 安装读就绪处理程序，当子进程给父进程发送rdb数据时， 父进程使用该函数将rdb数据发送给slave的网络套接字上
             if (aeCreateFileEvent(server.el, server.rdb_pipe_read, AE_READABLE, rdbPipeReadHandler,NULL) == AE_ERR) {
                 serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");
             }

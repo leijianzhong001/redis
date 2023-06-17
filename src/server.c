@@ -2507,7 +2507,12 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * 
      * We also don't send the ACKs while clients are paused, since it can
      * increment the replication backlog, they'll be sent after the pause
-     * if we are still the master. */
+     * if we are still the master.
+     *
+     * 如果在前一个事件循环迭代期间至少有一个客户端阻塞，则向所有从服务器发送ACK请求。
+     * 请注意，我们在 processUnblockedClients() 之后执行此操作，因此，如果有多个流水线等待，并且刚刚未阻塞的WAIT再次阻塞，我们不必在没有其他事件循环事件的情况下等待服务器cron周期。
+     * 我们也不会在客户端暂停时发送ack，因为它会增加复制积压，如果我们仍然是主服务器，它们将在暂停后发送。
+     * */
     if (server.get_ack_from_slaves && !checkClientPauseTimeoutAndReturnIfPaused()) {
         robj *argv[3];
 
@@ -4015,7 +4020,9 @@ void call(client *c, int flags) {
 
         /* Call propagate() only if at least one of AOF / replication
          * propagation is needed. Note that modules commands handle replication
-         * in an explicit way, so we never replicate them automatically. */
+         * in an explicit way, so we never replicate them automatically.
+         * 【4.4】 只有当至少需要一个AOF / replication传播时，才调用propagate()。请注意，模块命令以显式的方式处理复制，因此我们不会自动复制它们。
+         * */
         if (propagate_flags != PROPAGATE_NONE && !(c->cmd->flags & CMD_MODULE))
             propagate(c->cmd,c->db->id,c->argv,c->argc,propagate_flags);
     }

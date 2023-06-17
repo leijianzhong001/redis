@@ -245,7 +245,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_MASTER_FORCE_REPLY (1<<13)  /* Queue replies even if is master */
 #define CLIENT_FORCE_AOF (1<<14)   /* Force AOF propagation of current cmd.    强制将执行的命令写入aof文件， 即使命令并没有变更数据 */
 #define CLIENT_FORCE_REPL (1<<15)  /* Force replication of current cmd.        强制将执行的命令复制给所有从节点，即使命令并没有变更数据 */
-#define CLIENT_PRE_PSYNC (1<<16)   /* Instance don't understand PSYNC. */
+#define CLIENT_PRE_PSYNC (1<<16)   /* Instance don't understand PSYNC.         实例不支持PSYNC */
 #define CLIENT_READONLY (1<<17)    /* Cluster client is in read-only state. */
 #define CLIENT_PUBSUB (1<<18)      /* Client is in Pub/Sub mode. */
 #define CLIENT_PREVENT_AOF_PROP (1<<19)  /* Don't propagate to AOF.            禁止将当前执行的命令写入aof文件，即使命令已变更数据 */
@@ -1420,13 +1420,13 @@ struct redisServer {
     int rdb_child_type;             /* Type of save by active child. */
     int lastbgsave_status;          /* C_OK or C_ERR */
     int stop_writes_on_bgsave_err;  /* Don't allow writes if can't BGSAVE */
-    int rdb_pipe_read;              /* RDB pipe used to transfer the rdb data */
+    int rdb_pipe_read;              /* RDB pipe used to transfer the rdb data  RDB管道，用于在无盘复制的场景下父进程从子进程读取子进程生成的RDB数据 */
                                     /* to the parent process in diskless repl. */
-    int rdb_child_exit_pipe;        /* Used by the diskless parent allow child exit. */
-    connection **rdb_pipe_conns;    /* Connections which are currently the */
+    int rdb_child_exit_pipe;        /* Used by the diskless parent allow child exit. 由无磁盘父进程使用，父进程使用该管道向子进程发出它可以退出的信号，允许子进程退出 */
+    connection **rdb_pipe_conns;    /* Connections which are currently the     无盘复制的情况下， */
     int rdb_pipe_numconns;          /* target of diskless rdb fork child. */
     int rdb_pipe_numconns_writing;  /* Number of rdb conns with pending writes. */
-    char *rdb_pipe_buff;            /* In diskless replication, this buffer holds data */
+    char *rdb_pipe_buff;            /* In diskless replication, this buffer holds data 在无磁盘复制中，这个缓冲区用于暂存父进程从子进程那读取到的数据*/
     int rdb_pipe_bufflen;           /* that was read from the the rdb pipe. */
     int rdb_key_save_delay;         /* Delay in microseconds between keys while
                                      * writing the RDB. (for testings). negative

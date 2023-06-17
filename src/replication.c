@@ -216,7 +216,13 @@ int canFeedReplicaReplBuffer(client *replica) {
  * as well. This function is used if the instance is a master: we use
  * the commands received by our clients in order to create the replication
  * stream. Instead if the instance is a slave and has sub-slaves attached,
- * we use replicationFeedSlavesFromMasterStream() */
+ * we use replicationFeedSlavesFromMasterStream()
+ *
+ * 将写命令传播到从服务器，并填充复制积压缓冲区。
+ * 如果实例是主实例，则使用此函数:
+ *      我们使用客户端接收到的命令来作为复制流的实现。
+ *      相反，如果实例是从属实例并且附加了sub-slaves实例，则使用 replicationFeedSlavesFromMasterStream()
+ * */
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     listNode *ln;
     listIter li;
@@ -227,7 +233,10 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
      * the stream of data we receive from our master instead, in order to
      * propagate *identical* replication stream. In this way this slave can
      * advertise the same replication ID as the master (since it shares the
-     * master replication history and has the same backlog and offsets). */
+     * master replication history and has the same backlog and offsets).
+     * 如果实例不是顶级master，请尽快返回: 我们将代理从master接收到的数据流，以便传播相同的复制流。
+     * 通过这种方式，从服务器可以发布与主服务器相同的复制ID(因为它共享主服务器复制历史，并且具有相同的积压和偏移量)。
+     * */
     if (server.masterhost != NULL) return;
 
     /* If there aren't slaves, and there is no backlog buffer to populate,
@@ -271,7 +280,9 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     }
     server.slaveseldb = dictid;
 
-    /* Write the command to the replication backlog if any. */
+    /* Write the command to the replication backlog if any.
+     * 【1】将命令追加到复制挤压缓冲区
+     * */
     if (server.repl_backlog) {
         char aux[LONG_STR_SIZE+3];
 
@@ -315,6 +326,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         /* Finally any additional argument that was not stored inside the
          * static buffer if any (from j to argc). */
         for (j = 0; j < argc; j++)
+            // 【2】  将命令写出到从节点的输出缓冲区中，beforeSleep 函数会将输出缓冲区中的数据实际的刷出到网络套接字中
             addReplyBulk(slave,argv[j]);
     }
 }
@@ -512,7 +524,7 @@ int replicationSetupSlaveForFullResync(client *slave, long long offset) {
     int buflen;
 
     slave->psync_initial_offset = offset;
-    // 设置当前从客户端进入 SLAVE_STATE_WAIT_BGSAVE_END 状态，因为可以复用已经生成的rdb
+    // 【1】 设置当前从客户端进入 SLAVE_STATE_WAIT_BGSAVE_END 状态，因为可以复用已经生成的rdb
     slave->replstate = SLAVE_STATE_WAIT_BGSAVE_END;
     /* We are going to accumulate the incremental changes for this
      * slave as well. Set slaveseldb to -1 in order to force to re-emit
@@ -522,7 +534,7 @@ int replicationSetupSlaveForFullResync(client *slave, long long offset) {
     /* Don't send this reply to slaves that approached us with
      * the old SYNC command. */
     if (!(slave->flags & CLIENT_PRE_PSYNC)) {
-        // 发送一个 +FULLRESYNC <replid> <offset> 指令给从节点，告诉从节点是全量复制
+        // 【2】 发送一个 +FULLRESYNC <replid> <offset> 指令给从节点，告诉从节点是全量复制
         buflen = snprintf(buf,sizeof(buf),"+FULLRESYNC %s %lld\r\n",
                           server.replid,offset);
         if (connWrite(slave->conn,buf,buflen) != buflen) {
@@ -1116,8 +1128,13 @@ void replconfCommand(client *c) {
  * 3) Make sure the writable event is re-installed, since calling the SYNC
  *    command disables it, so that we can accumulate output buffer without
  *    sending it to the replica.
- * 4) Update the count of "good replicas". */
+ * 4) Update the count of "good replicas".
+ *
+ * 1、 设置从节点客户端 client.replstate 进入 SLAVE_STATE_ONLINE 状态
+ * 2、 为主从连接注册写就绪事件的回调函数 sendReplyToClient，将该从从节点客户端输出缓冲区的内容发送给从节点
+ * */
 void putSlaveOnline(client *slave) {
+    // 【1】 设置从节点客户端 client.replstate 进入 SLAVE_STATE_ONLINE 状态
     slave->replstate = SLAVE_STATE_ONLINE;
     slave->repl_put_online_on_ack = 0;
     slave->repl_ack_time = server.unixtime; /* Prevent false timeout. */
@@ -1129,6 +1146,7 @@ void putSlaveOnline(client *slave) {
         freeClientAsync(slave);
         return;
     }
+    // 【2】 为主从连接注册写就绪事件的回调函数 sendReplyToClient。 当主从连接变得可写时，尝试将该从节点客户端输出缓冲区（固定输出缓冲区或者动态输出缓冲区）的内容发送给从节点，用于持续复制
     if (connSetWriteHandler(slave->conn, sendReplyToClient) == C_ERR) {
         serverLog(LL_WARNING,"Unable to register writable event for replica bulk transfer: %s", strerror(errno));
         freeClient(slave);
@@ -1195,6 +1213,7 @@ void sendBulkToSlave(connection *conn) {
     char buf[PROTO_IOBUF_LEN];
     ssize_t nwritten, buflen;
 
+    // 【1】 使用磁盘同步功能时， 发送RDB数据使用的时定长格式，先发送数据长度标识 $<length>\r\n， 实际值就是类似 $225\r\n 这样的
     /* Before sending the RDB file, we send the preamble as configured by the
      * replication process. Currently the preamble is just the bulk count of
      * the file in the form "$<length>\r\n". */
@@ -1218,8 +1237,10 @@ void sendBulkToSlave(connection *conn) {
         }
     }
 
+    // 【2】 如果序言成功发送， 则开始发送rdb内容
     /* If the preamble was already transferred, send the RDB bulk data. */
     lseek(slave->repldbfd,slave->repldboff,SEEK_SET);
+    // slave->repldbfd 持有rdb文件的文件句柄，这里从rdb文件中读取16kb的数据到buf中
     buflen = read(slave->repldbfd,buf,PROTO_IOBUF_LEN);
     if (buflen <= 0) {
         serverLog(LL_WARNING,"Read error sending DB to replica: %s",
@@ -1227,6 +1248,7 @@ void sendBulkToSlave(connection *conn) {
         freeClient(slave);
         return;
     }
+    // 写出buf中的数据到网络套接字
     if ((nwritten = connWrite(conn,buf,buflen)) == -1) {
         if (connGetState(conn) != CONN_STATE_CONNECTED) {
             serverLog(LL_WARNING,"Write error sending DB to replica: %s",
@@ -1235,12 +1257,17 @@ void sendBulkToSlave(connection *conn) {
         }
         return;
     }
+    // 【3】 发送完成后，删除主从连接的 Write 就绪事件的回调函数，并调用 putSlaveOnline 函数。
     slave->repldboff += nwritten;
     atomicIncr(server.stat_net_output_bytes, nwritten);
     if (slave->repldboff == slave->repldbsize) {
         close(slave->repldbfd);
         slave->repldbfd = -1;
+        // 删除写就绪事件的处理函数
         connSetWriteHandler(slave->conn,NULL);
+        // putSlaveOnline 函数执行如下逻辑：
+        //      1、 设置从节点客户端 client.replstate 进入 SLAVE_STATE_ONLINE 状态
+        //      2、 为主从连接注册写就绪事件的回调函数 sendReplyToClient，将该从从节点客户端输出缓冲区的内容发送给从节点
         putSlaveOnline(slave);
     }
 }
@@ -1288,7 +1315,9 @@ void rdbPipeWriteHandler(struct connection *conn) {
     rdbPipeWriteHandlerConnRemoved(conn);
 }
 
-/* Called in diskless master, when there's data to read from the child's rdb pipe */
+/* Called in diskless master, when there's data to read from the child's rdb pipe
+ * 当有数据要从子进程的rdb管道中读取时，在无磁盘主进程中调用
+ * */
 void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask) {
     UNUSED(mask);
     UNUSED(clientData);
@@ -1299,6 +1328,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
     serverAssert(server.rdb_pipe_numconns_writing==0);
 
     while (1) {
+        // 【1】 从 管道中读取数据到 server.rdb_pipe_buff， 每次最多16k
         server.rdb_pipe_bufflen = read(fd, server.rdb_pipe_buff, PROTO_IOBUF_LEN);
         if (server.rdb_pipe_bufflen < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK)
@@ -1316,6 +1346,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
             return;
         }
 
+        // 【2】 如果读取结束，删除管道上的读就绪事件回调函数，关闭管道，通知子进程退出
         if (server.rdb_pipe_bufflen == 0) {
             /* EOF - write end was closed. */
             int stillUp = 0;
@@ -1330,7 +1361,9 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
             serverLog(LL_WARNING,"Diskless rdb transfer, done reading from pipe, %d replicas still up.", stillUp);
             /* Now that the replicas have finished reading, notify the child that it's safe to exit. 
              * When the server detectes the child has exited, it can mark the replica as online, and
-             * start streaming the replication buffers. */
+             * start streaming the replication buffers.
+             * 现在副本已经完成读取，通知子进程可以安全退出了。当服务器检测到子进程退出时，它可以将副本标记为在线，并开始流式传输复制缓冲区。
+             * */
             close(server.rdb_child_exit_pipe);
             server.rdb_child_exit_pipe = -1;
             return;
@@ -1345,6 +1378,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
                 continue;
 
             client *slave = connGetPrivateData(conn);
+            // 【3】 将子进程发来的数据写出到从节点的网络套接字上
             if ((nwritten = connWrite(conn, server.rdb_pipe_buff, server.rdb_pipe_bufflen)) == -1) {
                 if (connGetState(conn) != CONN_STATE_CONNECTED) {
                     serverLog(LL_WARNING,"Diskless rdb transfer, write error sending DB to replica: %s",
@@ -1357,12 +1391,16 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
                 slave->repldboff = 0;
             } else {
                 /* Note: when use diskless replication, 'repldboff' is the offset
-                 * of 'rdb_pipe_buff' sent rather than the offset of entire RDB. */
+                 * of 'rdb_pipe_buff' sent rather than the offset of entire RDB.
+                 * 注意:当使用无磁盘复制时，'repldboff'是'rdb_pipe_buff'发送的偏移量，而不是整个RDB的偏移量。
+                 * */
                 slave->repldboff = nwritten;
                 atomicIncr(server.stat_net_output_bytes, nwritten);
             }
             /* If we were unable to write all the data to one of the replicas,
-             * setup write handler (and disable pipe read handler, below) */
+             * setup write handler (and disable pipe read handler, below)
+             * 如果我们无法将所有数据写入其中一个副本，请设置写处理程序(并禁用管道读处理程序，见下文)
+             * */
             if (nwritten != server.rdb_pipe_bufflen) {
                 slave->repl_last_partial_write = server.unixtime;
                 server.rdb_pipe_numconns_writing++;
@@ -1375,7 +1413,9 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
             serverLog(LL_WARNING,"Diskless rdb transfer, last replica dropped, killing fork child.");
             killRDBChild();
         }
-        /*  Remove the pipe read handler if at least one write handler was set. */
+        /*  Remove the pipe read handler if at least one write handler was set.
+         * 如果设置了至少一个写处理程序，则删除管道读处理程序
+         * */
         if (server.rdb_pipe_numconns_writing || stillAlive == 0) {
             aeDeleteFileEvent(server.el, server.rdb_pipe_read, AE_READABLE);
             break;
@@ -1397,12 +1437,12 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
  * otherwise C_ERR is passed to the function.
  * The 'type' argument is the type of the child that terminated
  * (if it had a disk or socket target).
- * 在每次后台保存结束时，或者在将复制RDB传输策略从磁盘修改为套接字或其他方式时，调用此函数。
- * 这个函数的目标是处理等待bgsave成功的从节点，以便执行非阻塞同步;
+ * 在每次bgsave结束时，或者在将复制RDB传输策略从磁盘修改为套接字或其他方式时，调用此函数。
+ * 这个函数的目标是处理那些等待bgsave执行成功的从节点，意图将bgsave数据发送给从节点;
  * 如果在BGSAVE正在进行的过程中有附属节点，但它不适合复制(没有其他从节点累积差异)，则调度一个新的BGSAVE。
  * 如果后台保存成功，则参数bgsaveerr为C_OK，否则C_ERR传递给函数。
  *
- * 'type'参数是被终止的子进程的类型(如果它有一个磁盘或套接字目标)，其实是 server.rdb_child_type
+ * 'type'参数是被终止的子进程的类型(如 RDB_CHILD_TYPE_SOCKET 表示的RDB子进程生成的rdb的目标是Socket)。其实就是 server.rdb_child_type 的值
  *
  * */
 void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
@@ -1410,12 +1450,15 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
     listIter li;
 
     /* Note: there's a chance we got here from within the REPLCONF ACK command
-     * so we must avoid using freeClient, otherwise we'll crash on our way up. */
+     * so we must avoid using freeClient, otherwise we'll crash on our way up.
+     * 注意:我们有机会从 REPLCONF ACK 命令中得到这里，所以我们必须避免使用freeClient，否则我们会在晋升的过程中崩溃。
+     * */
 
     listRewind(server.slaves,&li);
     while((ln = listNext(&li))) {
         client *slave = ln->value;
 
+        // 这里只处理复制状态是 SLAVE_STATE_WAIT_BGSAVE_END（等待bgsave结束） 的从节点
         if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_END) {
             struct redis_stat buf;
 
@@ -1429,9 +1472,10 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
              * the RDB from disk to the slave socket. Otherwise if this was
              * already an RDB -> Slaves socket transfer, used in the case of
              * diskless replication, our work is trivial, we can just put
-             * the slave online. */
+             * the slave online.
+             * */
             if (type == RDB_CHILD_TYPE_SOCKET) {
-                // 【2】
+                // 【2】 如果是无盘复制，在 rdbSaveToSlavesSockets 函数中生成rdb的时候就直接发送了，所以这里什么都不做
                 serverLog(LL_NOTICE,
                     "Streamed RDB transfer with replica %s succeeded (socket). Waiting for REPLCONF ACK from slave to enable streaming",
                         replicationGetSlaveName(slave));
@@ -1459,12 +1503,24 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
                  * simpler and less CPU intensive if no more data is sent
                  * after such final EOF. So we don't want to glue the end of
                  * the RDB trasfer with the start of the other replication
-                 * data. */
-                slave->replstate = SLAVE_STATE_ONLINE;
+                 * data.
+                 *
+                 * 在持续复制的情况下，从节点会通过 RESP "REPLCONF" "ACK" "2351193" 指令向主节点报告自己的复制偏移量
+                 * 注意:我们等待来自副本的 REPLCONF ACK 消息，以便真正将其联机(安装写处理程序，以便可以传输累积的数据)。但是，我们会尽快更改复制状态，因为我们的从服务器现在技术上是在线的。
+                 *
+                 * 工作是这样进行的:
+                 * 1。我们通过套接字结束RDB文件的传输。
+                 * 2. 副本处于ONLINE状态，但没有安装写处理程序。
+                 * 3. 然而，副本实际上是在线的，并通过 REPLCONF ACK 命令ping回我们。
+                 * 4. 现在，我们终于安装了写处理程序，并将迄今为止累积的缓冲区发送给副本。
+                 *
+                 * 但我们为什么要这么做呢?因为当我们直接通过套接字流RDB时，副本必须检测RDB的EOF(文件结束)，这是RDB末尾的一个特殊随机字符串(对于流RDB，我们不知道长度)。
+                 * 如果在这样的最终EOF之后不再发送数据，那么检测这样的最终EOF字符串要简单得多，而且CPU占用也更少。因此，我们不希望将RDB传输的结束与其他复制数据的开始粘合在一起
+                 * */
+                slave->replstate = SLAVE_STATE_ONLINE; // 数据同步完成
                 slave->repl_put_online_on_ack = 1;
                 slave->repl_ack_time = server.unixtime; /* Timeout otherwise. */
             } else {
-                // 【3】
                 if ((slave->repldbfd = open(server.rdb_filename,O_RDONLY)) == -1 ||
                     redis_fstat(slave->repldbfd,&buf) == -1) {
                     freeClientAsync(slave);
@@ -1473,11 +1529,13 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
                 }
                 slave->repldboff = 0;
                 slave->repldbsize = buf.st_size;
+                // 【2】 让从节点的复制状态进入  SLAVE_STATE_SEND_BULK(正在发送RDB数据) 状态
                 slave->replstate = SLAVE_STATE_SEND_BULK;
                 slave->replpreamble = sdscatprintf(sdsempty(),"$%lld\r\n",
                     (unsigned long long) slave->repldbsize);
 
                 connSetWriteHandler(slave->conn,NULL);
+                //【3】 非无盘复制的情况下，为主从连接注册Write就绪事件的回调函数 sendBulkToSlave, 该函数负责将rdb数据发送给从节点
                 if (connSetWriteHandler(slave->conn,sendBulkToSlave) == C_ERR) {
                     freeClientAsync(slave);
                     continue;
@@ -1989,7 +2047,7 @@ void readSyncBulkPayload(connection *conn) {
 
         /* Verify the end mark is correct. */
         if (usemark) {
-            // 变长格式的rdb：$EOF:<byteDelimiter><rdb数据><byteDelimiter>
+            // 变长格式的rdb：$EOF:<byteDelimiter>\r\n<rdb数据><byteDelimiter>
             // 可以看到在rdb文件的最后，主节点还会传输一个40个字节的定界符。所以这里会比较读取到的定界符和开始读到的定界符是否一致
             if (!rioRead(&rdb,buf,CONFIG_RUN_ID_SIZE) ||
                 memcmp(buf,eofmark,CONFIG_RUN_ID_SIZE) != 0)
@@ -2799,7 +2857,7 @@ void syncWithMaster(connection *conn) {
         return;
     }
 
-    // 走到这里，说明主节点返回的是 ===============================>>>全量复制<<<===============================
+    // 走到这里，说明主节点返回的是 ===============================>>> +FULLRESYNC 全量复制 <<<===============================
 
     /* PSYNC failed or is not supported: we want our slaves to resync with us
      * as well, if we have any sub-slaves. The master may transfer us an
@@ -3771,7 +3829,10 @@ void replicationCron(void) {
 
     /* Send ACK to master from time to time.
      * Note that we do not send periodic acks to masters that don't
-     * support PSYNC and replication offsets. */
+     * support PSYNC and replication offsets.
+     * 不时地向master发送ACK。 REPLCONF ACK 2257743
+     * 请注意，我们不会向不支持PSYNC和复制偏移的主机发送周期性ack
+     * */
     if (server.masterhost && server.master &&
         !(server.master->flags & CLIENT_PRE_PSYNC))
         replicationSendAck();
@@ -3779,7 +3840,10 @@ void replicationCron(void) {
     /* If we have attached slaves, PING them from time to time.
      * So slaves can implement an explicit timeout to masters, and will
      * be able to detect a link disconnection even if the TCP connection
-     * will not actually go down. */
+     * will not actually go down.
+     * 如果我们有附加的slave节点，请不时地PING它们,以实现超时检测
+     * 因此，slave服务器可以对主服务器实现显式超时，并且即使TCP连接实际上没有断开，也能够检测到链路断开。
+     * */
     listIter li;
     listNode *ln;
     robj *ping_argv[1];
@@ -3791,7 +3855,10 @@ void replicationCron(void) {
         /* Note that we don't send the PING if the clients are paused during
          * a Redis Cluster manual failover: the PING we send will otherwise
          * alter the replication offsets of master and slave, and will no longer
-         * match the one stored into 'mf_master_offset' state. */
+         * match the one stored into 'mf_master_offset' state.
+         *
+         * 请注意，如果客户端在Redis cluster手动故障转移期间暂停，我们不会发送PING: 否则我们发送的PING将改变主和从的复制偏移量，并且不再匹配存储为'mf_master_offset'状态的PING。
+         * */
         int manual_failover_in_progress =
             ((server.cluster_enabled &&
               server.cluster->mf_end) ||
@@ -3818,7 +3885,12 @@ void replicationCron(void) {
      * The newline will be ignored by the slave but will refresh the
      * last interaction timer preventing a timeout. In this case we ignore the
      * ping period and refresh the connection once per second since certain
-     * timeouts are set at a few seconds (example: PSYNC response). */
+     * timeouts are set at a few seconds (example: PSYNC response).
+     * 其次，向处于pre-synchronization阶段的所有从服务器发送换行符，pre-synchronization 即等待主服务器创建RDB文件的从服务器。
+     *
+     * 也发送一个换行到所有的被锁的slave，如果我们失去了与我们的master的连接，让slave知道他们的master是在线的。这是必需的，因为sub-slaves只从顶级主服务器接收代理数据，因此没有显式的ping，以避免改变复制偏移量。
+     * 这种特殊的带外ping(换行)可以发送，它们对偏移量没有影响。换行符将被从服务器忽略，但会刷新最后一个交互计时器，以防止超时。在这种情况下，我们忽略ping周期并每秒刷新一次连接，因为某些超时设置为几秒(例如:PSYNC响应)。
+     * */
     listRewind(server.slaves,&li);
     while((ln = listNext(&li))) {
         client *slave = ln->value;

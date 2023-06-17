@@ -368,7 +368,11 @@ void _addReplyProtoToList(client *c, const char *s, size_t len) {
  * The following functions are the ones that commands implementations will call.
  * -------------------------------------------------------------------------- */
 
-/* Add the object 'obj' string representation to the client output buffer. */
+/* Add the object 'obj' string representation to the client output buffer.
+ * 将对象'obj'字符串表示形式添加到客户端输出缓冲区。
+ *
+ * 用于在client 输出缓冲区上对数据进行排队的高级函数。
+ * */
 void addReply(client *c, robj *obj) {
     // 将客户端添加到 server。
     if (prepareClientToWrite(c) != C_OK) return;
@@ -1632,7 +1636,8 @@ client *lookupClientByID(uint64_t id) {
  * This function is called by threads, but always with handler_installed
  * set to 0. So when handler_installed is set to 0 the function must be
  * thread safe.
- * 将输出缓冲区中的数据写入客户端。
+ *
+ * 将当前客户端输出缓冲区中的内容写出到网络套接字
  * 如果客户端在调用后仍然有效，则返回C_OK，如果由于某些错误而释放，则返回C_ERR。
  * 如果设置了handler_installed，它将尝试清除写事件。
  * 这个函数由线程调用，但总是将 handler_installed 设置为0。因此，当 handler_installed 设置为0时，该函数必须是线程安全的
@@ -1701,7 +1706,7 @@ int writeToClient(client *c, int handler_installed) {
          * a slave or a monitor (otherwise, on high-speed traffic, the
          * replication/output buffer will grow indefinitely)
          *
-         * 请注意，我们避免发送超过NET_MAX_WRITES_PER_EVENT字节，在单线程服务器中，服务其他客户端也是一个好主意，即使一个非常大的请求来自总是能够接受数据的超级快速链接(在现实世界的场景中，考虑针对环回接口的“KEYS”)。
+         * 请注意，我们避免发送超过 NET_MAX_WRITES_PER_EVENT 字节，在单线程服务器中，服务其他客户端也是一个好主意，即使一个非常大的请求来自总是能够接受数据的超级快速链接(在现实世界的场景中，考虑针对环回接口的“KEYS”)。
          * 然而，如果我们超过了最大内存限制，我们就忽略它，只是尽可能多地传递数据。
          * 此外，如果客户端是从机或监视器，我们也会发送尽可能多的数据(否则，在高速流量下，复制输出缓冲区将无限增长)。
          * */
@@ -1724,6 +1729,7 @@ int writeToClient(client *c, int handler_installed) {
          * as an interaction, since we always send REPLCONF ACK commands
          * that take some time to just fill the socket output buffer.
          * We just rely on data / pings received for timeout detection.
+         *
          * 对于代表主端的客户端，我们不把发送数据算作交互，因为我们总是发送 REPLCONF ACK 命令，这需要一些时间来填充套接字输出缓冲区。
          * 我们仅仅依靠接收到的数据ping来进行超时检测
          * */
