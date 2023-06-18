@@ -1283,9 +1283,9 @@ int rdbSaveInfoAuxFields(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     if (rsi) {
         if (rdbSaveAuxFieldStrInt(rdb,"repl-stream-db",rsi->repl_stream_db)
             == -1) return -1;
-        if (rdbSaveAuxFieldStrStr(rdb,"repl-id",server.replid)
+        if (rdbSaveAuxFieldStrStr(rdb,"repl-id",server.replid) // 保存 server.replid
             == -1) return -1;
-        if (rdbSaveAuxFieldStrInt(rdb,"repl-offset",server.master_repl_offset)
+        if (rdbSaveAuxFieldStrInt(rdb,"repl-offset",server.master_repl_offset) // 保存 server.master_repl_offset
             == -1) return -1;
     }
     if (rdbSaveAuxFieldStrInt(rdb,"aof-preamble",aof_preamble) == -1) return -1;

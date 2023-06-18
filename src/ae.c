@@ -513,7 +513,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
                 }
             }
 
-            // 【9】 如果 aeFileEvent.mask中设置了 AE_BARRIER 标志，则在这里处理 AE_READABLE 事件
+            // 【9】 如果 aeFileEvent.mask 中设置了 AE_BARRIER 标志，则在这里处理 AE_READABLE 事件
             /* If we have to invert the call, fire the readable event now
              * after the writable one. */
             if (invert) {

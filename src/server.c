@@ -6190,10 +6190,15 @@ void loadDataFromDisk(void) {
     } else {
         rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
         errno = 0; /* Prevent a stale value from affecting error checking */
+        // 【1】 调用 rdbLoad 函数 加载rdb数据，会将 repl-id 和 repl-offset 赋给 rsi.repl_id 和 rsi.repl_offset
         if (rdbLoad(server.rdb_filename,&rsi,RDBFLAGS_NONE) == C_OK) {
             serverLog(LL_NOTICE,"DB loaded from disk: %.3f seconds",
                 (float)(ustime()-start)/1000000);
 
+            // 【2】 如果当前节点是从节点，则将 rsi.repl_id 和 rsi.repl_offset 赋值给 server.replid 和 server.master_repl_offset.
+            // 并调用 replicationCacheMasterUsingMyself 函数执行如下操作：
+            //      【2.1】 调用 replicationCreateMasterClient 函数创建 server.master, 并将 server.master_repl_offset 和 server.replid 赋值给 server.master.reploff、server.master.replid
+            //      【2.2】 将 server.master 赋值给 server.cached_master, 并将 server.master 置空。
             /* Restore the replication ID / offset from the RDB file.
              * 从RDB文件中恢复 replication ID / offset。
              * */
@@ -6211,7 +6216,9 @@ void loadDataFromDisk(void) {
                 server.master_repl_offset = rsi.repl_offset;
                 /* If we are a slave, create a cached master from this
                  * information, in order to allow partial resynchronizations
-                 * with masters. */
+                 * with masters.
+                 * 如果我们是slave，则根据这些信息创建一个缓存的master，以便允许与master进行部分重新同步
+                 * */
                 replicationCacheMasterUsingMyself();
                 selectDb(server.cached_master,rsi.repl_stream_db);
             }

@@ -1439,7 +1439,7 @@ void freeClient(client *c) {
      *
      * Note that before doing this we make sure that the client is not in
      * some unexpected state, by checking its flags. */
-    // 如果客户端是一个 redis master节点（说明是当前节点的主节点），则缓存该客户端信息，并将主从状态置为待连接状态，以便后续与主节点重新建立连接。
+    // 如果客户端是一个 redis master 节点（说明是当前节点的主节点），则缓存该客户端信息，并将主从状态置为待连接状态，以便后续与主节点重新建立连接。
     if (server.master && c->flags & CLIENT_MASTER) {
         serverLog(LL_WARNING,"Connection with master lost.");
         if (!(c->flags & (CLIENT_PROTOCOL_ERROR|CLIENT_BLOCKED))) {

@@ -896,7 +896,7 @@ typedef struct client {
                                buffer or object being sent.                    在当前缓冲区或正在发送的对象中已发送的字节数 */
     time_t ctime;           /* Client creation time. */
     long duration;          /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
-    time_t lastinteraction; /* Time of the last interaction, used for timeout */
+    time_t lastinteraction; /* Time of the last interaction, used for timeout  主从节点最后一次交互的时间，用于超时。每次当前节点通过 readQueryFromClient 函数从客户端查询缓冲区中读取到数据时，都会更新该值 */
     time_t obuf_soft_limit_reached_time;
     uint64_t flags;         /* Client flags: CLIENT_* macros.                  客户端标志 */
     int authenticated;      /* Needed when the default user requires auth. */
@@ -907,14 +907,14 @@ typedef struct client {
     off_t repldbsize;       /* Replication DB file size. */
     sds replpreamble;       /* Replication DB preamble. */
     long long read_reploff; /* Read replication offset if this is a master.    当前节点已从该主节点上读取的复制偏移量，这个偏移量会在每次读到主节点请求时累加 */
-    long long reploff;      /* Applied replication offset if this is a master. 当前节点已从该主节点成功复制的复制偏移量， 对应从节点 info replication 中的 slave_repl_offset */
-    long long repl_ack_off; /* Replication ack offset, if this is a slave.     当前主节点已经收到的该从节点上被确认的复制偏移量 */
+    long long reploff;      /* Applied replication offset if this is a master. 当前节点已从该主节点成功复制的复制偏移量， 对应从节点 info replication 中的 slave_repl_offset，如果主从完全同步，这个值会达到主节点INFO中master_repl_offset的值，也是主节点 server.master_repl_offset 的值 */
+    long long repl_ack_off; /* Replication ack offset, if this is a slave.     从节点上被已经确认的复制偏移量 */
     long long repl_ack_time;/* Replication ack time, if this is a slave. */
     long long repl_last_partial_write; /* The last time the server did a partial write from the RDB child pipe to this replica  */
     long long psync_initial_offset; /* FULLRESYNC reply offset other slaves
                                        copying this slave output buffer
                                        should use.                             FULLRESYNC 应答时给从节点回复的当前偏移量。 这个字段会在其他从服务器复用当前slave生成的rdb时使用，因为既然复用了rdb，那么存储在从客户端输出缓冲区新生成的写入命令也应该被复用 */
-    char replid[CONFIG_RUN_ID_SIZE+1]; /* Master replication ID (if master). */
+    char replid[CONFIG_RUN_ID_SIZE+1]; /* Master replication ID (if master).   主节点复制id, 对应主从节点INFO中的 master_replid 的值，也就是主从节点的 server.replid（是的，主从节点都有这个值，从节点的值是从主节点继承而来） */
     int slave_listening_port; /* As configured with: REPLCONF listening-port */
     char *slave_addr;       /* Optionally given by REPLCONF ip-address */
     int slave_capa;         /* Slave capabilities: SLAVE_CAPA_* bitwise OR. */
@@ -1507,8 +1507,8 @@ struct redisServer {
      *
      * 下面两个字段是我们在PSYNC进行时存储主 PSYNC replid/offset 的地方。最后，我们将把这两个字段复制到 server->master 的client结构体中
      * */
-    char master_replid[CONFIG_RUN_ID_SIZE+1];  /* Master PSYNC runid.          发起psync时使用的 主节点的 runid */
-    long long master_initial_offset;           /* Master PSYNC offset.         向主节点发起psync请求时的 offset */
+    char master_replid[CONFIG_RUN_ID_SIZE+1];  /* Master PSYNC runid.          发起psync时使用的 主节点的 runid。在接收完RDB数据后，进入复制阶段之前，会将该值赋给当前节点的server.replid属性，并在创建主节点客户端时，将这个属性赋给 server.master.replid 属性 */
+    long long master_initial_offset;           /* Master PSYNC offset.         向主节点发起psync请求时的 offset。在接收完RDB数据后，进入复制阶段之前，会将该值赋给当前节点的 server.master_repl_offset 属性，并在创建主节点客户端时，将这个属性赋给 server.master.reploff 属性*/
     int repl_slave_lazy_flush;          /* Lazy FLUSHALL before loading DB? */
     /* Replication script cache. */
     dict *repl_scriptcache_dict;        /* SHA1 all slaves are aware of. */
