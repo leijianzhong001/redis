@@ -4049,7 +4049,10 @@ void replicationCron(void) {
 
     /* If AOF is disabled and we no longer have attached slaves, we can
      * free our Replication Script Cache as there is no need to propagate
-     * EVALSHA at all. */
+     * EVALSHA at all.
+     *
+     * 如果AOF被禁用，并且我们不再有附加的slave，我们可以释放我们的复制脚本缓存，因为根本不需要传播 EVALSHA
+     * */
     if (listLength(server.slaves) == 0 &&
         server.aof_state == AOF_OFF &&
         listLength(server.repl_scriptcache_fifo) != 0)
@@ -4057,13 +4060,20 @@ void replicationCron(void) {
         replicationScriptCacheFlush();
     }
 
-    // 【9】 如果主节点中不存在子进程，则遍历所有的从节点客户端，如果存在
+    // 【9】 如果主节点中不存在子进程，则遍历所有的从节点客户端，如果存在 SLAVE_STATE_WAIT_BGSAVE_START 状态的从节点客户端，则调用 startBgsaveForReplication 函数开始生成RDB数据。
+    // 前面 syncCommand 函数时说过，如果主节点正在生成发送到Socket的RDB数据，则需要等待该RDB操作完成之后在生成新的RDB， 改场景正是在这里生成新的RDB文件
     replicationStartPendingFork();
 
     /* Remove the RDB file used for replication if Redis is not running
-     * with any persistence. */
+     * with any persistence.
+     * 如果Redis没有运行任何持久化，请删除用于复制的RDB文件
+     * */
     removeRDBUsedToSyncReplicas();
 
+    // 【10】 主节点维护了 server.repl_good_slaves_count 属性，用于记录正常的从节点数量，这里检查所有的从节点客户端是否在线并更新该属性。
+    // 从 Replication 函数可以看出，，主从节点都会定时发送报文：
+    //      从节点发送 REPLCONF ACK offset ，给主节点上报自己的复制偏移量
+    //      主节点发送ping命令，保证主从连接不会超时断开
     /* Refresh the number of slaves with lag <= min-slaves-max-lag. */
     refreshGoodSlavesCount();
     replication_cron_loops++; /* Incremented with frequency 1 HZ. */
