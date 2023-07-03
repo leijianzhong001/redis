@@ -1571,19 +1571,19 @@ struct redisServer {
     int notify_keyspace_events; /* Events to propagate via Pub/Sub. This is an
                                    xor of NOTIFY_... flags. */
     /* Cluster */
-    int cluster_enabled;      /* Is cluster enabled? */
+    int cluster_enabled;      /* Is cluster enabled?                           当前节点是否启动了Cluster模式 */
     mstime_t cluster_node_timeout; /* Cluster node timeout. */
-    char *cluster_configfile; /* Cluster auto-generated config file name. */
-    struct clusterState *cluster;  /* State of the cluster */
+    char *cluster_configfile; /* Cluster auto-generated config file name.      cluster自动生成的配置文件名称，其实就是node.conf文件内容 */
+    struct clusterState *cluster;  /* State of the cluster                     clusterState结构体，存储cluster集群信息，其实就是当前节点视角下的整个集群状态 */
     int cluster_migration_barrier; /* Cluster replicas migration barrier. */
     int cluster_allow_replica_migration; /* Automatic replica migrations to orphaned masters and from empty masters */
     int cluster_slave_validity_factor; /* Slave max data age for failover. */
     int cluster_require_full_coverage; /* If true, put the cluster down if
                                           there is at least an uncovered slot.*/
     int cluster_slave_no_failover;  /* Prevent slave from starting a failover
-                                       if the master is in failure state. */
-    char *cluster_announce_ip;  /* IP address to announce on cluster bus. */
-    int cluster_announce_port;     /* base port to announce on cluster bus. */
+                                       if the master is in failure state.      禁止该节点进行故障转移 */
+    char *cluster_announce_ip;  /* IP address to announce on cluster bus.      指定当前节点在集群总线中向其他节点发布的ip地址 */
+    int cluster_announce_port;     /* base port to announce on cluster bus.    指定当前节点在集群总线中向其他节点发布的端口号 */
     int cluster_announce_tls_port; /* TLS port to announce on cluster bus. */
     int cluster_announce_bus_port; /* bus port to announce on cluster bus. */
     int cluster_module_flags;      /* Set of flags that Redis modules are able

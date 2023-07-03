@@ -45,10 +45,10 @@ typedef struct clusterLink {
 } clusterLink;
 
 /* Cluster node flags and macros. */
-#define CLUSTER_NODE_MASTER 1     /* The node is a master */
-#define CLUSTER_NODE_SLAVE 2      /* The node is a slave */
-#define CLUSTER_NODE_PFAIL 4      /* Failure? Need acknowledge */
-#define CLUSTER_NODE_FAIL 8       /* The node is believed to be malfunctioning */
+#define CLUSTER_NODE_MASTER 1     /* The node is a master                      该节点是主节点 */
+#define CLUSTER_NODE_SLAVE 2      /* The node is a slave                       该节点是从节点 */
+#define CLUSTER_NODE_PFAIL 4      /* Failure? Need acknowledge                 该节点已主观下线 */
+#define CLUSTER_NODE_FAIL 8       /* The node is believed to be malfunctioning 该节点已可客观下线 */
 #define CLUSTER_NODE_MYSELF 16    /* This node is myself */
 #define CLUSTER_NODE_HANDSHAKE 32 /* We have still to exchange the first ping */
 #define CLUSTER_NODE_NOADDR   64  /* We don't know the address of this node */
@@ -108,52 +108,54 @@ typedef struct clusterLink {
 
 /* This structure represent elements of node->fail_reports. */
 typedef struct clusterNodeFailReport {
-    struct clusterNode *node;  /* Node reporting the failure condition. */
-    mstime_t time;             /* Time of the last report from this node. */
+    struct clusterNode *node;  /* Node reporting the failure condition.        报告该节点为主观下线的节点 */
+    mstime_t time;             /* Time of the last report from this node.      最近收到下线报告的时间 */
 } clusterNodeFailReport;
 
+/* clusterNode 结构体负责存放CLuster节点实例的相关信息 */
 typedef struct clusterNode {
     mstime_t ctime; /* Node object creation time. */
-    char name[CLUSTER_NAMELEN]; /* Node name, hex string, sha1-size */
-    int flags;      /* CLUSTER_NODE_... */
-    uint64_t configEpoch; /* Last configEpoch observed for this node */
-    unsigned char slots[CLUSTER_SLOTS/8]; /* slots handled by this node */
+    char name[CLUSTER_NAMELEN]; /* Node name, hex string, sha1-size            节点名称，即节点id， 每个节点启动时都将该属性初始化为40字节的随机字符串， 作为节点的唯一标识 */
+    int flags;      /* CLUSTER_NODE_...                                        flags: 节点标志，存储节点的状态、属性等。主要关注以下标志： CLUSTER_NODE_MASTER，CLUSTER_NODE_SLAVE,CLUSTER_NODE_PFAIL,CLUSTER_NODE_FAIL  */
+    uint64_t configEpoch; /* Last configEpoch observed for this node           当前写入文件的任期号，可以理解为最新执行故障转移成功的任期。*/
+    unsigned char slots[CLUSTER_SLOTS/8]; /* slots handled by this node        槽位位图， 记录该节点负责的槽位 */
     sds slots_info; /* Slots info represented by string. */
     int numslots;   /* Number of slots handled by this node */
     int numslaves;  /* Number of slave nodes, if this is a master */
-    struct clusterNode **slaves; /* pointers to slave nodes */
+    struct clusterNode **slaves; /* pointers to slave nodes                     该节点的从节点列表 */
     struct clusterNode *slaveof; /* pointer to the master node. Note that it
                                     may be NULL even if the node is a slave
                                     if we don't have the master node in our
-                                    tables. */
-    mstime_t ping_sent;      /* Unix time we sent latest ping */
-    mstime_t pong_received;  /* Unix time we received the pong */
-    mstime_t data_received;  /* Unix time we received any data */
-    mstime_t fail_time;      /* Unix time when FAIL flag was set */
-    mstime_t voted_time;     /* Last time we voted for a slave of this master */
+                                    tables.                                    该节点的主节点实例。指向主节点的指针。注意，如果我们的表中没有主节点，即使节点是从节点，它也可能是NULL。*/
+    mstime_t ping_sent;      /* Unix time we sent latest ping                  上次给该节点发送ping请求的时间 */
+    mstime_t pong_received;  /* Unix time we received the pong                 上次该节点收到pong响应的时间 */
+    mstime_t data_received;  /* Unix time we received any data                 上次该节点收到任何响应数据的时间 */
+    mstime_t fail_time;      /* Unix time when FAIL flag was set               节点下线时间 */
+    mstime_t voted_time;     /* Last time we voted for a slave of this master  上次该节点的投票时间 */
     mstime_t repl_offset_time;  /* Unix time we received offset for this node */
     mstime_t orphaned_time;     /* Starting time of orphaned master condition */
     long long repl_offset;      /* Last known repl offset for this node. */
-    char ip[NET_IP_STR_LEN];  /* Latest known IP address of this node */
-    int port;                   /* Latest known clients port (TLS or plain). */
+    char ip[NET_IP_STR_LEN];  /* Latest known IP address of this node           节点ip地址 */
+    int port;                   /* Latest known clients port (TLS or plain).    节点端口 */
     int pport;                  /* Latest known clients plaintext port. Only used
                                    if the main clients port is for TLS. */
-    int cport;                  /* Latest known cluster port of this node. */
-    clusterLink *link;          /* TCP/IP link with this node */
-    list *fail_reports;         /* List of nodes signaling this as failing */
+    int cport;                  /* Latest known cluster port of this node.      节点总线端口 */
+    clusterLink *link;          /* TCP/IP link with this node                   当前节点与该节点的连接 */
+    list *fail_reports;         /* List of nodes signaling this as failing      当前节点的下线报告链表，记录所有判定该节点主观下线的主节点，用于进行客观下线统计。clusterNodeFailReport结构体， */
 } clusterNode;
 
+// Redis Cluster 中的每个节点都维护一份自己视角下的整个集群的状态，该状态的信息存储在clusterState结构体中
 typedef struct clusterState {
-    clusterNode *myself;  /* This node */
-    uint64_t currentEpoch;
-    int state;            /* CLUSTER_OK, CLUSTER_FAIL, ... */
+    clusterNode *myself;  /* This node                                         节点自身实例 */
+    uint64_t currentEpoch; /*                                                  集群当前任期号，用于实现raft算法选举。cluster和sentinel一样， 通过选举leader节点来完成故障转移工作 */
+    int state;            /* CLUSTER_OK, CLUSTER_FAIL, ...                     集群状态码，Cluster集群存在 CLUSTER_OK, CLUSTER_FAIL 等状态码 */
     int size;             /* Num of master nodes with at least one slot */
-    dict *nodes;          /* Hash table of name -> clusterNode structures */
+    dict *nodes;          /* Hash table of name -> clusterNode structures      集群节点实例字典，字典键为节点id, 字典值指向 clusterNode 结构体 */
     dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */
-    clusterNode *migrating_slots_to[CLUSTER_SLOTS];
-    clusterNode *importing_slots_from[CLUSTER_SLOTS];
-    clusterNode *slots[CLUSTER_SLOTS];
-    uint64_t slots_keys_count[CLUSTER_SLOTS];
+    clusterNode *migrating_slots_to[CLUSTER_SLOTS]; /*                         迁出槽位，数组元素不为空，代表该槽位数据正在从当前节点迁移到数组元素的指定节点. 数组下标代表槽位, 数组值代表要迁移到哪个节点 */
+    clusterNode *importing_slots_from[CLUSTER_SLOTS]; /*                       迁入槽位，数组元素不为空，代表该槽位数组正从数组元素指定节点迁入当前节点, 数组下标代表槽位, 数组值代表该槽位从哪个节点迁入 */
+    clusterNode *slots[CLUSTER_SLOTS]; /*                                      槽和节点映射数组。数组下标代表槽位，数组下标对应的值就是节点 */
+    uint64_t slots_keys_count[CLUSTER_SLOTS]; /*                               每个槽位对应的key数量 */
     rax *slots_to_keys;
     /* The following fields are used to take the slave state on elections. */
     mstime_t failover_auth_time; /* Time of previous or next election. */

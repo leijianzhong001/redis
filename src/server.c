@@ -4275,15 +4275,15 @@ int processCommand(client *c) {
      * 2) The command has no key arguments. */
     // 【4.3】 如果服务器运行在cluster模式下，并且当前节点不是该命令的键的存储节点，则返回ask或者moved重定向通知客户端请求真正的存储节点
     if (server.cluster_enabled &&
-        !(c->flags & CLIENT_MASTER) &&
+        !(c->flags & CLIENT_MASTER) && // 该请求不是主节点发送的
         !(c->flags & CLIENT_LUA &&
-          server.lua_caller->flags & CLIENT_MASTER) &&
+          server.lua_caller->flags & CLIENT_MASTER) && // 请求不是lua客户端发来的并且不是主节点发来的
         !(!cmdHasMovableKeys(c->cmd) && c->cmd->firstkey == 0 &&
-          c->cmd->proc != execCommand))
+          c->cmd->proc != execCommand)) // 该请求存在键参数
     {
         int hashslot;
         int error_code;
-        // 找到可以执行该key的节点
+        // 【2】 找到可以执行该key的节点
         clusterNode *n = getNodeByQuery(c,c->cmd,c->argv,c->argc,
                                         &hashslot,&error_code);
         if (n == NULL || n != server.cluster->myself) {
@@ -4292,6 +4292,7 @@ int processCommand(client *c) {
             } else {
                 flagTransaction(c);
             }
+            // 【3】 返回ask或者moved重定向标志及重定向目标节点，通知客户端重定向
             clusterRedirectClient(c,n,hashslot,error_code);
             c->cmd->rejected_calls++;
             return C_OK;

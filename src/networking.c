@@ -3323,7 +3323,9 @@ static void retainOriginalCommandVector(client *c) {
 
 /* Redact a given argument to prevent it from being shown
  * in the slowlog. This information is stored in the
- * original_argv array. */
+ * original_argv array.
+ * 编辑给定的参数以防止它在慢日志中显示。该信息存储在original_argv数组中。
+ * */
 void redactClientCommandArgument(client *c, int argc) {
     retainOriginalCommandVector(c);
     decrRefCount(c->argv[argc]);
@@ -4041,7 +4043,7 @@ int handleClientsWithPendingReadsUsingThreads(void) {
     }
     listEmpty(io_threads_list[0]);
 
-    // 【5】 不断的检测每个线程的 io_thread_pending ， 知道所有的 io_thread_pending 都为0， 这时所有线程都已经完成工作。
+    // 【5】 不断的检测每个线程的 io_thread_pending ， 直到所有的 io_thread_pending 都为0， 这时所有线程都已经完成工作。
     /* Wait for all the other threads to end their work. */
     while(1) {
         unsigned long pending = 0;
