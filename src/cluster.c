@@ -1012,6 +1012,12 @@ void clusterAddNode(clusterNode *node) {
  * 3) Free the node with freeClusterNode() that will in turn remove it
  *    from the hash table and from the list of slaves of its master, if
  *    it is a slave node.
+ *
+ * 从集群中移除节点。该函数执行高级清理，调用freeClusterNode()进行低级清理。
+ * 在这里，我们做以下的事情:
+ *  1)将它处理的所有插槽标记为未分配。
+ *  2)删除该节点发送并被其他节点引用的所有故障报告。
+ *  3)使用 freeClusterNode() 释放该节点，如果它是一个从节点，该节点将从哈希表和主节点的从节点列表中删除。
  */
 void clusterDelNode(clusterNode *delnode) {
     int j;
@@ -2273,7 +2279,9 @@ void handleLinkIOError(clusterLink *link) {
 
 /* Send data. This is handled using a trivial send buffer that gets
  * consumed by write(). We don't try to optimize this for speed too much
- * as this is a very low traffic channel. */
+ * as this is a very low traffic channel.
+ * 发送数据。这是使用一个普通的发送缓冲区来处理的，该缓冲区被write()消耗。由于这是一个非常低的流量通道，我们并没有尝试优化它的速度。
+ * */
 void clusterWriteHandler(connection *conn) {
     clusterLink *link = connGetPrivateData(conn);
     ssize_t nwritten;
@@ -2292,6 +2300,7 @@ void clusterWriteHandler(connection *conn) {
 
 /* A connect handler that gets called when a connection to another node
  * gets established.
+ * 当建立到另一个节点的连接时调用的连接处理程序。
  */
 void clusterLinkConnectHandler(connection *conn) {
     clusterLink *link = connGetPrivateData(conn);
@@ -2306,7 +2315,9 @@ void clusterLinkConnectHandler(connection *conn) {
         return;
     }
 
-    /* Register a read handler from now on */
+    /* Register a read handler from now on
+     * 【1】为这个新创建的链接注册一个读就绪事件的回调函数
+     * */
     connSetReadHandler(conn, clusterReadHandler);
 
     /* Queue a PING in the new connection ASAP: this is crucial
@@ -2314,21 +2325,32 @@ void clusterLinkConnectHandler(connection *conn) {
      *
      * If the node is flagged as MEET, we send a MEET message instead
      * of a PING one, to force the receiver to add us in its node
-     * table. */
+     * table.
+     * Gossip消息类型：
+     *  meet消息：用于通知新节点加入。消息发送者通知接收者加入到当前集群**，meet消息通信正常完成后，接收节点会加入到集群中并进行周期性的ping、pong消息交换。
+     *  ping消息：集群内交换最频繁的消息，集群内每个节点每秒向多个其他节点发送ping消息，用于检测节点是否在线和交换彼此状态信息。ping消息发送封装了自身节点和部分其他节点的状态数据。
+     *  pong消息：当接收到ping、meet消息时，作为响应消息回复给发送方确认消息正常通信。pong消息内部封装了自身状态数据。节点也可以向集群内广播自身的pong消息来通知整个集群对自身状态进行更新。
+     *  fail消息：当节点判定集群内另一个节点下线时，会向集群内广播一个fail消息，其他节点接收到fail消息之后把对应节点更新为下线状态。
+     * */
     mstime_t old_ping_sent = node->ping_sent;
+    // 【2】创建连接成功之后，给目标节点发送 CLUSTER_NODE_MEET 消息或 CLUSTERMSG_TYPE_PING 消息
     clusterSendPing(link, node->flags & CLUSTER_NODE_MEET ?
             CLUSTERMSG_TYPE_MEET : CLUSTERMSG_TYPE_PING);
     if (old_ping_sent) {
         /* If there was an active ping before the link was
          * disconnected, we want to restore the ping time, otherwise
-         * replaced by the clusterSendPing() call. */
+         * replaced by the clusterSendPing() call.
+         * 如果在连接断开之前有一个活动的ping，我们希望恢复ping时间，否则由 clusterSendPing() 调用替换。
+         * */
         node->ping_sent = old_ping_sent;
     }
     /* We can clear the flag after the first packet is sent.
      * If we'll never receive a PONG, we'll never send new packets
      * to this node. Instead after the PONG is received and we
      * are no longer in meet/handshake status, we want to send
-     * normal PING packets. */
+     * normal PING packets.
+     * 我们可以在发送第一个数据包后清除标志。如果我们永远不会收到一个PONG，我们就永远不会向这个节点发送新的数据包。相反，在收到PONG之后，我们不再处于握手状态，我们希望发送正常的PING数据包。
+     * */
     node->flags &= ~CLUSTER_NODE_MEET;
 
     serverLog(LL_DEBUG,"Connecting with Node %.40s at %s:%d",
@@ -2337,7 +2359,10 @@ void clusterLinkConnectHandler(connection *conn) {
 
 /* Read data. Try to read the first field of the header first to check the
  * full length of the packet. When a whole packet is in memory this function
- * will call the function to process the packet. And so forth. */
+ * will call the function to process the packet. And so forth.
+ * 读取数据。尝试先读取报头的第一个字段来检查数据包的完整长度。当整个包都在内存中时，该函数将调用该函数来处理该包。等等。
+ * clusterReadHandler 函数负责处理两类消息，一类是其他节点主从发送的消息（当前节点作为服务端），一类是当前节点发送消息发送消息后，其他回复的相应数据
+ * */
 void clusterReadHandler(connection *conn) {
     clusterMsg buf[1];
     ssize_t nread;
@@ -2395,8 +2420,9 @@ void clusterReadHandler(connection *conn) {
             rcvbuflen += nread;
         }
 
-        /* Total length obtained? Process this packet. */
+        /* Total length obtained? Process this packet. 当所有的数据都已经被获取时，开始解析并处理 */
         if (rcvbuflen >= 8 && rcvbuflen == ntohl(hdr->totlen)) {
+            // 解析数据包并处理
             if (clusterProcessPacket(link)) {
                 if (link->rcvbuf_alloc > RCVBUF_INIT_LEN) {
                     zfree(link->rcvbuf);
@@ -2414,9 +2440,14 @@ void clusterReadHandler(connection *conn) {
  *
  * It is guaranteed that this function will never have as a side effect
  * the link to be invalidated, so it is safe to call this function
- * from event handlers that will do stuff with the same link later. */
+ * from event handlers that will do stuff with the same link later.
+ * 将内容放入发送缓冲区。
+ * 可以保证这个函数永远不会有要使链接失效的副作用，因此从事件处理程序中调用这个函数是安全的，事件处理程序稍后将对相同的链接执行操作。
+ * */
 void clusterSendMessage(clusterLink *link, unsigned char *msg, size_t msglen) {
+    // 数据包发送缓冲区为空并且将要发送的数据包长度不为0
     if (sdslen(link->sndbuf) == 0 && msglen != 0)
+        // 设置写就绪回调函数，以真正发送meet,ping,pong消息
         connSetWriteHandlerWithBarrier(link->conn, clusterWriteHandler, 1);
 
     link->sndbuf = sdscatlen(link->sndbuf, msg, msglen);
@@ -2460,22 +2491,29 @@ void clusterBuildMessageHdr(clusterMsg *hdr, int type) {
     /* If this node is a master, we send its slots bitmap and configEpoch.
      * If this node is a slave we send the master's information instead (the
      * node is flagged as slave so the receiver knows that it is NOT really
-     * in charge for this slots. */
+     * in charge for this slots.
+     * 如果这个节点是主节点，我们发送它的槽位图和configEpoch。
+     * 如果该节点是从节点，则发送主节点的信息(该节点被标记为从节点，以便接收方知道它并不真正负责该插槽)。
+     * */
     master = (nodeIsSlave(myself) && myself->slaveof) ?
               myself->slaveof : myself;
 
     memset(hdr,0,sizeof(*hdr));
+    // 在C语言中，htons函数用于将一个16位无符号短整型（unsigned short）从主机字节序转换为网络字节序
     hdr->ver = htons(CLUSTER_PROTO_VER);
     hdr->sig[0] = 'R';
     hdr->sig[1] = 'C';
     hdr->sig[2] = 'm';
     hdr->sig[3] = 'b';
     hdr->type = htons(type);
+    // 设置发送者
     memcpy(hdr->sender,myself->name,CLUSTER_NAMELEN);
 
     /* If cluster-announce-ip option is enabled, force the receivers of our
      * packets to use the specified address for this node. Otherwise if the
-     * first byte is zero, they'll do auto discovery. */
+     * first byte is zero, they'll do auto discovery.
+     * 如果启用了 cluster-announce-ip 选项，则强制数据包的接收者使用该节点的指定地址。否则，如果第一个字节为零，它们将自动发现
+     * */
     memset(hdr->myip,0,NET_IP_STR_LEN);
     if (server.cluster_announce_ip) {
         strncpy(hdr->myip,server.cluster_announce_ip,NET_IP_STR_LEN);
@@ -2484,6 +2522,7 @@ void clusterBuildMessageHdr(clusterMsg *hdr, int type) {
 
     /* Handle cluster-announce-[tls-|bus-]port. */
     int announced_port, announced_pport, announced_cport;
+    // 派生要在集群总线中宣布的端口
     deriveAnnouncedPorts(&announced_port, &announced_pport, &announced_cport);
 
     memcpy(hdr->myslots,master->slots,sizeof(hdr->myslots));
@@ -2502,6 +2541,7 @@ void clusterBuildMessageHdr(clusterMsg *hdr, int type) {
 
     /* Set the replication offset. */
     if (nodeIsSlave(myself))
+        // 获取复制偏移量
         offset = replicationGetSlaveOffset();
     else
         offset = server.master_repl_offset;
@@ -2512,7 +2552,9 @@ void clusterBuildMessageHdr(clusterMsg *hdr, int type) {
         hdr->mflags[0] |= CLUSTERMSG_FLAG0_PAUSED;
 
     /* Compute the message length for certain messages. For other messages
-     * this is up to the caller. */
+     * this is up to the caller.
+     * 计算特定消息的消息长度。对于其他消息，这取决于调用者。
+     * */
     if (type == CLUSTERMSG_TYPE_FAIL) {
         totlen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
         totlen += sizeof(clusterMsgDataFail);
@@ -2553,17 +2595,21 @@ void clusterSetGossipEntry(clusterMsg *hdr, int i, clusterNode *n) {
 }
 
 /* Send a PING or PONG packet to the specified node, making sure to add enough
- * gossip information. */
+ * gossip information.
+ * 向指定节点发送PING或PONG数据包，确保添加足够的gossip信息。
+ * */
 void clusterSendPing(clusterLink *link, int type) {
     unsigned char *buf;
     clusterMsg *hdr;
-    int gossipcount = 0; /* Number of gossip sections added so far. */
-    int wanted; /* Number of gossip sections we want to append if possible. */
-    int totlen; /* Total packet length. */
+    int gossipcount = 0; /* Number of gossip sections added so far.            gossip消息中要添加的节点数量 */
+    int wanted; /* Number of gossip sections we want to append if possible.    如果可能的话，我们想要附加到gossip部分的节点数量 */
+    int totlen; /* Total packet length.                                        包长度 */
     /* freshnodes is the max number of nodes we can hope to append at all:
      * nodes available minus two (ourself and the node we are sending the
      * message to). However practically there may be less valid nodes since
-     * nodes in handshake state, disconnected, are not considered. */
+     * nodes in handshake state, disconnected, are not considered.
+     * Freshnodes是我们希望添加的最大节点数: 可用节点减去2(我们自己和我们发送消息的节点)。然而，实际上可能会有更少的有效节点，因为处于握手状态的节点没有被考虑。
+     * */
     int freshnodes = dictSize(server.cluster->nodes)-2;
 
     /* How many gossip sections we want to add? 1/10 of the number of nodes
@@ -2591,29 +2637,53 @@ void clusterSendPing(clusterLink *link, int type) {
      *
      * Since we have non-voting slaves that lower the probability of an entry
      * to feature our node, we set the number of entries per packet as
-     * 10% of the total nodes we have. */
+     * 10% of the total nodes we have.
+     *
+     * 我们要在gossip消息中附加多少个节点的信息?  答案是节点总数量的1/10，但不能少于3个，最多包含total_size-2个。为什么是1/10?
+     *
+     * 如果我们有N个主节点，则消息体中会携带N/10个节点的信息，并且我们认为在 cluster_node_timeout 长的时间内中我们与其他节点交换至少4个数据包(在最坏的情况下我们在 cluster_node_timeout/2 时间内ping集群中的每个节点一次，并且我们还从每个ping目标机器接收两个pong)，
+     * 我们在 node_timeout * 2 失败报告有效时间内总共有8个数据包。因此，对于单个PFAIL节点，我们可以期望收到以下数量的故障报告(在指定的时间窗口内):
+     * PROB * GOSSIP_ENTRIES_PER_PACKET * TOTAL_PACKETS:
+     *
+     * PROB = probability of being featured in a single gossip entry,
+     *        which is 1 / NUM_OF_NODES. 在单个gossip条目中出现的概率，即1/NUM_OF_NODES
+     * ENTRIES = 10.
+     * TOTAL_PACKETS = 2 * 4 * NUM_OF_MASTERS.
+     *
+     * 如果我们假设我们只有主节点(所以节点数和主节点数是相同的)，每次发送1/10的节点的话，我们总是能够覆盖大多数节点，特别是80%的节点数，以记录许多主节点同时失败。
+     * 由于我们有不投票的从节点，这降低了一个条目以我们的节点为特征的概率，我们将每个数据包的节点数设置为我们拥有的节点总数的10%。
+     * */
     wanted = floor(dictSize(server.cluster->nodes)/10);
-    if (wanted < 3) wanted = 3;
+    if (wanted < 3) wanted = 3; // 至少携带3个其他节点信息
     if (wanted > freshnodes) wanted = freshnodes;
 
     /* Include all the nodes in PFAIL state, so that failure reports are
-     * faster to propagate to go from PFAIL to FAIL state. */
+     * faster to propagate to go from PFAIL to FAIL state.
+     *
+     * 包括主观下线状态的所有节点，以便故障报告能够更快地从PFAIL状态传播到FAIL状态。
+     * */
     int pfail_wanted = server.cluster->stats_pfail_nodes;
 
     /* Compute the maximum totlen to allocate our buffer. We'll fix the totlen
      * later according to the number of gossip sections we really were able
-     * to put inside the packet. */
+     * to put inside the packet.
+     *
+     * 计算分配缓冲区的最大容量。我们稍后会根据我们真正能够放入包中的八卦部分的数量来修复totlen。
+     * */
     totlen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
     totlen += (sizeof(clusterMsgDataGossip)*(wanted+pfail_wanted));
     /* Note: clusterBuildMessageHdr() expects the buffer to be always at least
-     * sizeof(clusterMsg) or more. */
+     * sizeof(clusterMsg) or more.
+     * 注意:clusterBuildMessageHdr()期望缓冲区总是至少为sizeof(clusterMsg)或更多
+     * */
     if (totlen < (int)sizeof(clusterMsg)) totlen = sizeof(clusterMsg);
     buf = zcalloc(totlen);
     hdr = (clusterMsg*) buf;
 
     /* Populate the header. */
     if (link->node && type == CLUSTERMSG_TYPE_PING)
-        link->node->ping_sent = mstime();
+        link->node->ping_sent = mstime(); // 更新 ping_sent 时间
+    // 构建消息头
     clusterBuildMessageHdr(hdr,type);
 
     /* Populate the gossip fields */
@@ -2633,6 +2703,11 @@ void clusterSendPing(clusterLink *link, int type) {
          * 1) Nodes in HANDSHAKE state.
          * 3) Nodes with the NOADDR flag set.
          * 4) Disconnected nodes if they don't have configured slots.
+         *
+         * 在gossip消息中不包括如下节点:
+         *  1)节点在握手状态。
+         *  2)设置了NOADDR标志的节点。
+         *  3)断开连接的节点，如果他们没有配置插槽。
          */
         if (this->flags & (CLUSTER_NODE_HANDSHAKE|CLUSTER_NODE_NOADDR) ||
             (this->link == NULL && this->numslots == 0))
@@ -2644,13 +2719,13 @@ void clusterSendPing(clusterLink *link, int type) {
         /* Do not add a node we already have. */
         if (clusterNodeIsInGossipSection(hdr,gossipcount,this)) continue;
 
-        /* Add it */
+        /* Add it 添加到 clusterMsg.data中 */
         clusterSetGossipEntry(hdr,gossipcount,this);
         freshnodes--;
         gossipcount++;
     }
 
-    /* If there are PFAIL nodes, add them at the end. */
+    /* If there are PFAIL nodes, add them at the end. 如果有PFAIL节点，请在最后添加它们 */
     if (pfail_wanted) {
         dictIterator *di;
         dictEntry *de;
@@ -2673,7 +2748,9 @@ void clusterSendPing(clusterLink *link, int type) {
     }
 
     /* Ready to send... fix the totlen fiend and queue the message in the
-     * output buffer. */
+     * output buffer.
+     * 准备发送…修复totlen长度，并在输出缓冲区中对消息进行排队。
+     * */
     totlen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
     totlen += (sizeof(clusterMsgDataGossip)*gossipcount);
     hdr->count = htons(gossipcount);
@@ -3151,6 +3228,18 @@ void clusterFailoverReplaceYourMaster(void) {
  * 1) To check if we are able to perform a failover, is our data updated?
  * 2) Try to get elected by masters.
  * 3) Perform the failover informing all the other nodes.
+ *
+ * 如果我们是一个从节点，并且我们的主节点提供非零数量的哈希槽处于FAIL状态（注意，这个状态就是已经客观下线了），则调用此函数。
+ * 这个函数的目标是:
+ *      1) 检查我们是否能够执行故障转移，我们的数据是否更新?
+ *      2) 争取从其他master获取投票。
+ *      3) 执行故障切换，通知所有其他节点。
+ * 客观下线的主节点的所有从节点都有故障恢复的义务，当从节点从内部的定时任务中发现自身的主节点进入客观下线状态时，将触发如下的故障恢复流程：
+ *     1、资格检查
+ *     2、准备选举时间
+ *     3、发起选举
+ *     4、选举投票
+ *     5、替换主节点
  */
 void clusterHandleSlaveFailover(void) {
     mstime_t data_age;
@@ -3329,6 +3418,7 @@ void clusterHandleSlaveFailover(void) {
  * Slave migration is the process that allows a slave of a master that is
  * already covered by at least another slave, to "migrate" to a master that
  * is orphaned, that is, left with no working slaves.
+ * Slave迁移是一个过程，允许一个已经被至少另一个Slave覆盖的master的Slave“迁移”到一个孤立的主节点上，即这个孤立的主节点没有工作的slaves。
  * ------------------------------------------------------------------------- */
 
 /* This function is responsible to decide if this replica should be migrated
@@ -3488,7 +3578,9 @@ void manualFailoverCheckTimeout(void) {
 }
 
 /* This function is called from the cluster cron function in order to go
- * forward with a manual failover state machine. */
+ * forward with a manual failover state machine.
+ * 这个函数从集群cron函数中调用，以便继续使用手动故障转移状态机。
+ * */
 void clusterHandleManualFailover(void) {
     /* Return ASAP if no manual failover is in progress. */
     if (server.cluster->mf_end == 0) return;
@@ -3533,7 +3625,9 @@ void clusterCron(void) {
 
     /* We want to take myself->ip in sync with the cluster-announce-ip option.
      * The option can be set at runtime via CONFIG SET, so we periodically check
-     * if the option changed to reflect this into myself->ip. */
+     * if the option changed to reflect this into myself->ip.
+     * 我们想让myself->ip与cluster-announce-ip选项同步。该选项可以在运行时通过CONFIG set设置，因此我们定期检查该选项是否更改以反映到myself->ip中。
+     * */
     {
         static char *prev_ip = NULL;
         char *curr_ip = server.cluster_announce_ip;
@@ -3563,13 +3657,16 @@ void clusterCron(void) {
     /* The handshake timeout is the time after which a handshake node that was
      * not turned into a normal node is removed from the nodes. Usually it is
      * just the NODE_TIMEOUT value, but when NODE_TIMEOUT is too small we use
-     * the value of 1 second. */
+     * the value of 1 second.
+     * 握手超时是指未转变为正常节点的握手节点从节点中移除的时间。通常它只是NODE_TIMEOUT值，但是当NODE_TIMEOUT太小时，我们使用1秒的值。
+     * */
     handshake_timeout = server.cluster_node_timeout;
     if (handshake_timeout < 1000) handshake_timeout = 1000;
 
     /* Update myself flags. */
     clusterUpdateMyselfFlags();
 
+    //【1】 遍历实例字典中的实例，如果其中某个节点连信信息为空，则与该节点建立连接
     /* Check if we have disconnected nodes and re-establish the connection.
      * Also update a few stats while we are here, that can be used to make
      * better decisions in other part of the code. */
@@ -3586,16 +3683,22 @@ void clusterCron(void) {
             server.cluster->stats_pfail_nodes++;
 
         /* A Node in HANDSHAKE state has a limited lifespan equal to the
-         * configured node timeout. */
+         * configured node timeout.
+         * 创建连接的时间超出了 server.cluster_node_timeout 配置的值，则
+         * */
         if (nodeInHandshake(node) && now - node->ctime > handshake_timeout) {
+            // 从集群中移除节点
             clusterDelNode(node);
             continue;
         }
 
         if (node->link == NULL) {
             clusterLink *link = createClusterLink(node);
+            //【2】 创建Socket套接字
             link->conn = server.tls_cluster ? connCreateTLS() : connCreateSocket();
             connSetPrivateData(link->conn, link);
+            //【3】 connConnect函数负责与目标节点创建网络连接，其实就是创建集群总线连接，并在连接成功后，回调函数 clusterLinkConnectHandler。
+            // clusterLinkConnectHandler 函数会为该连接注册 READ 就绪事件回调函数 clusterReadHandler，并给目标节点发送 CLUSTER_NODE_MEET 消息或 CLUSTERMSG_TYPE_PING 消息
             if (connConnect(link->conn, node->ip, node->cport, NET_FIRST_BIND_ADDR,
                         clusterLinkConnectHandler) == -1) {
                 /* We got a synchronous error from connect before
@@ -3617,7 +3720,10 @@ void clusterCron(void) {
     dictReleaseIterator(di);
 
     /* Ping some random node 1 time every 10 iterations, so that we usually ping
-     * one random node every second. */
+     * one random node every second.
+     *  每10次迭代Ping某个随机节点1次，所以我们通常每秒Ping一个随机节点。
+     * 【4】集群内每个节点每秒会随机选取5个节点并找出其中最久没有通信的节点发送ping消息 ，用于保证Gossip信息交换的随机性。
+     * */
     if (!(iteration % 10)) {
         int j;
 
@@ -3638,6 +3744,7 @@ void clusterCron(void) {
         }
         if (min_pong_node) {
             serverLog(LL_DEBUG,"Pinging node %.40s", min_pong_node->name);
+            // 发送ping消息
             clusterSendPing(min_pong_node->link, CLUSTERMSG_TYPE_PING);
         }
     }
@@ -3647,9 +3754,17 @@ void clusterCron(void) {
      * 1) Check if there are orphaned masters (masters without non failing
      *    slaves).
      * 2) Count the max number of non failing slaves for a single master.
-     * 3) Count the number of slaves for our master, if we are a slave. */
+     * 3) Count the number of slaves for our master, if we are a slave.
+     * 迭代节点以检查是否需要将某些内容标记为失败。这个循环还负责:
+     *      1) 检查是否有孤立的master(没有非故障slave的master)。
+     *      2) 计算单个master的非故障slave的最大数量。
+     *      3) 如果我们是slave，请数一数我们master的slave节点数目。
+     * */
+    // 孤立的主节点数量
     orphaned_masters = 0;
+    // 拥有最多从节点的主节点的从机数量
     max_slaves = 0;
+    // 当前从节点的从机数量
     this_slaves = 0;
     di = dictGetSafeIterator(server.cluster->nodes);
     while((de = dictNext(di)) != NULL) {
@@ -3661,26 +3776,36 @@ void clusterCron(void) {
                 continue;
 
         /* Orphaned master check, useful only if the current instance
-         * is a slave that may migrate to another master. */
+         * is a slave that may migrate to another master.
+         * 孤立master检查，仅在当前实例是可能迁移到另一个主实例的从实例时有用。
+         * */
         if (nodeIsSlave(myself) && nodeIsMaster(node) && !nodeFailed(node)) {
+            // 非故障slave数量
             int okslaves = clusterCountNonFailingSlaves(node);
 
             /* A master is orphaned if it is serving a non-zero number of
              * slots, have no working slaves, but used to have at least one
-             * slave, or failed over a master that used to have slaves. */
+             * slave, or failed over a master that used to have slaves.
+             * 检查是否有孤立的master(没有非故障slave的master)。
+             * 如果一个主服务器正在服务非零数量的槽位，没有工作的从节点，但曾经至少有一个从，或者曾经有slave的主服务器失败，那么它就是孤立的主
+             * 说了这么多，简单来说可以认为就是没有从节点的主节点
+             * */
             if (okslaves == 0 && node->numslots > 0 &&
                 node->flags & CLUSTER_NODE_MIGRATE_TO)
             {
                 orphaned_masters++;
             }
-            if (okslaves > max_slaves) max_slaves = okslaves;
+            if (okslaves > max_slaves) max_slaves = okslaves; // 计算单个master的非故障slave的最大数量。
             if (nodeIsSlave(myself) && myself->slaveof == node)
+                // 如果我们是slave，请数一数我们master的slave节点数目。
                 this_slaves = okslaves;
         }
 
         /* If we are not receiving any data for more than half the cluster
          * timeout, reconnect the link: maybe there is a connection
-         * issue even if the node is alive. */
+         * issue even if the node is alive.
+         * 【5】如果我们在超过 server.cluster_node_timeout 的一半的时间内没有接收到任何数据，则重新连接: 即使节点是活的，也可能存在连接问题。
+         * */
         mstime_t ping_delay = now - node->ping_sent;
         mstime_t data_delay = now - node->data_received;
         if (node->link && /* is connected */
@@ -3692,14 +3817,17 @@ void clusterCron(void) {
             /* and in such interval we are not seeing any traffic at all. */
             data_delay > server.cluster_node_timeout/2)
         {
-            /* Disconnect the link, it will be reconnected automatically. */
+            /* Disconnect the link, it will be reconnected automatically. 断开链接，将自动重新连接 */
             freeClusterLink(node->link);
         }
 
         /* If we have currently no active ping in this instance, and the
          * received PONG is older than half the cluster timeout, send
          * a new ping now, to ensure all the nodes are pinged without
-         * a too big delay. */
+         * a too big delay.
+         * 如果我们在这个实例中目前没有活动ping，并且收到的PONG超过集群超时的一半，那么现在发送一个新的ping，以确保所有节点都能ping通，而不会有太大的延迟。
+         * 【6】 redisCLuster集群节点每100毫秒都会扫描本地节点列表，如果发现节点最近一次接受pong消息的时间大于cluster_node_timeout/2，则立刻发送ping消息 ，防止该节点信息太长时间未更新。
+         * */
         if (node->link &&
             node->ping_sent == 0 &&
             (now - node->pong_received) > server.cluster_node_timeout/2)
@@ -3709,7 +3837,9 @@ void clusterCron(void) {
         }
 
         /* If we are a master and one of the slaves requested a manual
-         * failover, ping it continuously. */
+         * failover, ping it continuously.
+         * 如果我们是主服务器，而其中一个从服务器请求手动故障转移，请连续ping它。
+         * */
         if (server.cluster->mf_end &&
             nodeIsMaster(myself) &&
             server.cluster->mf_slave == node &&
@@ -3729,17 +3859,25 @@ void clusterCron(void) {
          *
          * We also consider every incoming data as proof of liveness, since
          * our cluster bus link is also used for data: under heavy data
-         * load pong delays are possible. */
+         * load pong delays are possible.
+         * 检查该节点是否不可达。请注意，如果我们已经收到了PONG，那么node->ping_sent为零，因此根本无法到达此代码， 因此如果我们没有发送PING，我们就不会冒检查PONG延迟的风险。
+         * 我们还将每个传入数据视为活动证明，因为我们的集群总线链路也用于数据:在高数据负载下，延迟是可能的。
+         *
+         * 【7】 集群中的每个节点都会定期的向其他节点发送ping消息，并接收节点回复的pong消息作为相应。
+         * 如果在`cluster-node-timeout`设置的时间内针对某节点一直发送ping消息失败，则发送节点认为目标节点不可用，将其标记为主观下线状态。
+         * */
         mstime_t node_delay = (ping_delay < data_delay) ? ping_delay :
                                                           data_delay;
 
         if (node_delay > server.cluster_node_timeout) {
             /* Timeout reached. Set the node as possibly failing if it is
-             * not already in this state. */
+             * not already in this state.
+             * 超时了。如果节点尚未处于此状态，则将其设置为可能失败。
+             * */
             if (!(node->flags & (CLUSTER_NODE_PFAIL|CLUSTER_NODE_FAIL))) {
                 serverLog(LL_DEBUG,"*** NODE %.40s possibly failing",
                     node->name);
-                node->flags |= CLUSTER_NODE_PFAIL;
+                node->flags |= CLUSTER_NODE_PFAIL; // 该节点已主观下线
                 update_state = 1;
             }
         }
@@ -3748,33 +3886,46 @@ void clusterCron(void) {
 
     /* If we are a slave node but the replication is still turned off,
      * enable it if we know the address of our master and it appears to
-     * be up. */
+     * be up.
+     * 如果我们是一个从节点，但复制仍然关闭，如果我们知道主节点的地址，并且它似乎已经启动，则启用它。
+     * 【8】 尝试重新连接到主节点
+     * */
     if (nodeIsSlave(myself) &&
         server.masterhost == NULL &&
         myself->slaveof &&
         nodeHasAddr(myself->slaveof))
     {
+        // 建立复制关系
         replicationSetMaster(myself->slaveof->ip, myself->slaveof->port);
     }
 
-    /* Abort a manual failover if the timeout is reached. */
+    /* Abort a manual failover if the timeout is reached. 如果达到超时，则中止手动故障转移。 */
     manualFailoverCheckTimeout();
 
     if (nodeIsSlave(myself)) {
+        // 【9】处理手动故障转移状态机
         clusterHandleManualFailover();
         if (!(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER))
+            // 【10】 如果我们是一个从节点，并且我们的主节点提供非零数量的哈希槽处于FAIL状态（注意，这个状态就是已经客观下线了），则调用此函数执行故障转移
             clusterHandleSlaveFailover();
         /* If there are orphaned slaves, and we are a slave among the masters
          * with the max number of non-failing slaves, consider migrating to
          * the orphaned masters. Note that it does not make sense to try
          * a migration if there is no master with at least *two* working
-         * slaves. */
+         * slaves.
+         * 【11】 如果有孤立的从节点，而我们是拥有最多未失败slave的master中的一个slave，可以考虑迁移到孤立的master那里。
+         * 请注意，如果没有主服务器和至少两个工作的从服务器，那么尝试迁移是没有意义的。
+         *
+         * 注意: orphaned_masters和max_slaves变量只有在当前节点是从节点的场景下才有值，换言之，此时当前节点是从节点
+         * */
         if (orphaned_masters && max_slaves >= 2 && this_slaves == max_slaves &&
 		server.cluster_allow_replica_migration)
+            // 迁移到孤立的主节点上，称为该主节点的从机
             clusterHandleSlaveMigration(max_slaves);
     }
 
     if (update_state || server.cluster->state == CLUSTER_FAIL)
+        // 【12】 更新整个集群状态
         clusterUpdateState();
 }
 
