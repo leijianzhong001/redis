@@ -38,10 +38,10 @@ typedef struct clusterLink {
     mstime_t ctime;             /* Link creation time */
     connection *conn;           /* Connection to remote node */
     sds sndbuf;                 /* Packet send buffer                          数据包发送缓冲区 */
-    char *rcvbuf;               /* Packet reception buffer */
-    size_t rcvbuf_len;          /* Used size of rcvbuf */
-    size_t rcvbuf_alloc;        /* Allocated size of rcvbuf */
-    struct clusterNode *node;   /* Node related to this link if any, or NULL */
+    char *rcvbuf;               /* Packet reception buffer                     包接收缓冲器 */
+    size_t rcvbuf_len;          /* Used size of rcvbuf                         已使用的rvbuf大小 */
+    size_t rcvbuf_alloc;        /* Allocated size of rcvbuf                    分配的rvbuf大小 */
+    struct clusterNode *node;   /* Node related to this link if any, or NULL   与此链接相关的节点(如果有)，或NULL */
 } clusterLink;
 
 /* Cluster node flags and macros. */
@@ -54,7 +54,7 @@ typedef struct clusterLink {
 #define CLUSTER_NODE_NOADDR   64  /* We don't know the address of this node */
 #define CLUSTER_NODE_MEET 128     /* Send a MEET message to this node          要求进行握手的消息 */
 #define CLUSTER_NODE_MIGRATE_TO 256 /* Master eligible for replica migration. */
-#define CLUSTER_NODE_NOFAILOVER 512 /* Slave will not try to failover. */
+#define CLUSTER_NODE_NOFAILOVER 512 /* Slave will not try to failover.         从服务器不会尝试故障转移 */
 #define CLUSTER_NODE_NULL_NAME "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000"
 
 #define nodeIsMaster(n) ((n)->flags & CLUSTER_NODE_MASTER)
@@ -117,7 +117,7 @@ typedef struct clusterNode {
     mstime_t ctime; /* Node object creation time. */
     char name[CLUSTER_NAMELEN]; /* Node name, hex string, sha1-size            节点名称，即节点id， 每个节点启动时都将该属性初始化为40字节的随机字符串， 作为节点的唯一标识 */
     int flags;      /* CLUSTER_NODE_...                                        flags: 节点标志，存储节点的状态、属性等。主要关注以下标志： CLUSTER_NODE_MASTER，CLUSTER_NODE_SLAVE,CLUSTER_NODE_PFAIL,CLUSTER_NODE_FAIL  */
-    uint64_t configEpoch; /* Last configEpoch observed for this node           当前写入文件的任期号，可以理解为最新执行故障转移成功的任期。*/
+    uint64_t configEpoch; /* Last configEpoch observed for this node           每个主节点自身维护一个配置纪元（clusterNode.configEpoch）标示当前主节点的版本， 所有主节点的配置纪元都不相等 ，从节点会复制主节点的配置纪元 */
     unsigned char slots[CLUSTER_SLOTS/8]; /* slots handled by this node        槽位位图， 记录该节点负责的槽位 */
     sds slots_info; /* Slots info represented by string. */
     int numslots;   /* Number of slots handled by this node */
@@ -129,9 +129,9 @@ typedef struct clusterNode {
                                     tables.                                    该节点的主节点实例。指向主节点的指针。注意，如果我们的表中没有主节点，即使节点是从节点，它也可能是NULL。*/
     mstime_t ping_sent;      /* Unix time we sent latest ping                  上次给该节点发送ping请求的时间 如果我们已经收到了PONG，那么node->ping_sent为0 */
     mstime_t pong_received;  /* Unix time we received the pong                 上次从该节点收到pong响应的时间 */
-    mstime_t data_received;  /* Unix time we received any data                 上次该节点收到任何响应数据的时间 */
+    mstime_t data_received;  /* Unix time we received any data                 上次从该节点收到任何响应数据的时间 */
     mstime_t fail_time;      /* Unix time when FAIL flag was set               节点下线时间 */
-    mstime_t voted_time;     /* Last time we voted for a slave of this master  上次该节点的投票时间 */
+    mstime_t voted_time;     /* Last time we voted for a slave of this master  上次给该节点的投票时间 */
     mstime_t repl_offset_time;  /* Unix time we received offset for this node */
     mstime_t orphaned_time;     /* Starting time of orphaned master condition */
     long long repl_offset;      /* Last known repl offset for this node. */
@@ -147,9 +147,9 @@ typedef struct clusterNode {
 // Redis Cluster 中的每个节点都维护一份自己视角下的整个集群的状态，该状态的信息存储在clusterState结构体中
 typedef struct clusterState {
     clusterNode *myself;  /* This node                                         节点自身实例 */
-    uint64_t currentEpoch; /*                                                  集群当前任期号，用于实现raft算法选举。cluster和sentinel一样， 通过选举leader节点来完成故障转移工作 */
+    uint64_t currentEpoch; /*                                                  整个集群维护一个全局的配置纪元（clusterState.currentEpoch），用于记录集群内所有主节点配置纪元的最大版本 */
     int state;            /* CLUSTER_OK, CLUSTER_FAIL, ...                     集群状态码，Cluster集群存在 CLUSTER_OK, CLUSTER_FAIL 等状态码 */
-    int size;             /* Num of master nodes with at least one slot */
+    int size;             /* Num of master nodes with at least one slot        至少有一个槽位的主节点个数 */
     dict *nodes;          /* Hash table of name -> clusterNode structures      集群节点实例字典，字典键为节点id, 字典值指向 clusterNode 结构体 */
     dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */
     clusterNode *migrating_slots_to[CLUSTER_SLOTS]; /*                         迁出槽位，数组元素不为空，代表该槽位数据正在从当前节点迁移到数组元素的指定节点. 数组下标代表槽位, 数组值代表要迁移到哪个节点 */
@@ -158,11 +158,11 @@ typedef struct clusterState {
     uint64_t slots_keys_count[CLUSTER_SLOTS]; /*                               每个槽位对应的key数量 */
     rax *slots_to_keys;
     /* The following fields are used to take the slave state on elections. */
-    mstime_t failover_auth_time; /* Time of previous or next election. */
-    int failover_auth_count;    /* Number of votes received so far. */
-    int failover_auth_sent;     /* True if we already asked for votes. */
-    int failover_auth_rank;     /* This slave rank for current auth request. */
-    uint64_t failover_auth_epoch; /* Epoch of the current election. */
+    mstime_t failover_auth_time; /* Time of previous or next election.         本次选举的开始时间或下次选举的开始时间（本次选举已失败） ，集群最开始启动的时候，这个值为0 */
+    int failover_auth_count;    /* Number of votes received so far.            到目前为止收到的票数 */
+    int failover_auth_sent;     /* True if we already asked for votes.         本次选举是否已发送投票请求 */
+    int failover_auth_rank;     /* This slave rank for current auth request.   节点优先级，该数值越大，节点优先级越低，故障转移时节点重新发起选举前等待时间越长 */
+    uint64_t failover_auth_epoch; /* Epoch of the current election.            当前正在执行故障转移的纪元 */
     int cant_failover_reason;   /* Why a slave is currently not able to
                                    failover. See the CANT_FAILOVER_* macros. */
     /* Manual failover state in common. */
@@ -176,7 +176,7 @@ typedef struct clusterState {
     int mf_can_start;           /* If non-zero signal that the manual failover
                                    can start requesting masters vote. */
     /* The following fields are used by masters to take state on elections. */
-    uint64_t lastVoteEpoch;     /* Epoch of the last vote granted. */
+    uint64_t lastVoteEpoch;     /* Epoch of the last vote granted.             当前节点最近一次投票同意的纪元 */
     int todo_before_sleep; /* Things to do in clusterBeforeSleep(). */
     /* Messages received and sent by type. */
     long long stats_bus_messages_sent[CLUSTERMSG_TYPE_COUNT];

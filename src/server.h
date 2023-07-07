@@ -1456,7 +1456,7 @@ struct redisServer {
     long long master_repl_offset;   /* My current replication offset           表示当前主节点记录的已执行的写命令的偏移量。 这个值对应的是节点 info replication 中的 master_repl_offset 项 */
     long long second_replid_offset; /* Accept offsets up to this for replid2.  这个值对应的是 master 节点 info replication 中的 second_repl_offset 项 */
     int slaveseldb;                 /* Last SELECTed DB in replication output  最后一次复制输出中选择的DB */
-    int repl_ping_slave_period;     /* Master pings the slave every N seconds */
+    int repl_ping_slave_period;     /* Master pings the slave every N seconds  主服务器每N秒ping一次从服务器 */
     char *repl_backlog;             /* Replication backlog for partial syncs   复制积压缓冲区。主节点将最近执行的写命令写入复制积压缓冲区， 用于实现部分同步 */
     long long repl_backlog_size;    /* Backlog circular buffer size            复制积压缓冲区大小 */
     long long repl_backlog_histlen; /* Backlog actual data length              复制积压缓冲区已保存数据的有效长度。根据统计指标，可算出复制积压缓冲区内的可用偏移量范围： [repl_backlog_first_byte_offset, repl_backlog_first_byte_offset+repl_backlog_histlen]。 */
@@ -1495,7 +1495,7 @@ struct redisServer {
     int repl_serve_stale_data; /* Serve stale data when link is down? */
     int repl_slave_ro;          /* Slave is read only? */
     int repl_slave_ignore_maxmemory;    /* If true slaves do not evict. */
-    time_t repl_down_since; /* Unix time at which link with master went down */
+    time_t repl_down_since; /* Unix time at which link with master went down   与master连接断开的Unix时间 */
     int repl_disable_tcp_nodelay;   /* Disable TCP_NODELAY after SYNC? */
     int slave_priority;             /* Reported in INFO and used by Sentinel. */
     int replica_announced;          /* If true, replica is announced by Sentinel */
@@ -1577,7 +1577,7 @@ struct redisServer {
     struct clusterState *cluster;  /* State of the cluster                     clusterState结构体，存储cluster集群信息，其实就是当前节点视角下的整个集群状态 */
     int cluster_migration_barrier; /* Cluster replicas migration barrier. */
     int cluster_allow_replica_migration; /* Automatic replica migrations to orphaned masters and from empty masters */
-    int cluster_slave_validity_factor; /* Slave max data age for failover. */
+    int cluster_slave_validity_factor; /* Slave max data age for failover.      如果从节点与主节点断线时间超过 cluster-node-time * cluster-slave-validity-factor，则当前从节点不具备故障转移资格。参数cluster-slavevalidity-factor用于从节点的有效因子，默认为10*/
     int cluster_require_full_coverage; /* If true, put the cluster down if
                                           there is at least an uncovered slot.*/
     int cluster_slave_no_failover;  /* Prevent slave from starting a failover
