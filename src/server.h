@@ -1284,7 +1284,7 @@ struct redisServer {
     long long stat_expiredkeys;     /* Number of expired keys */
     double stat_expired_stale_perc; /* Percentage of keys probably expired */
     long long stat_expired_time_cap_reached_count; /* Early expire cylce stops.*/
-    long long stat_expire_cycle_time_used; /* Cumulative microseconds used. */
+    long long stat_expire_cycle_time_used; /* Cumulative microseconds used.    累积使用的微秒数 */
     long long stat_evictedkeys;     /* Number of evicted keys (maxmemory) */
     long long stat_keyspace_hits;   /* Number of successful lookups of keys */
     long long stat_keyspace_misses; /* Number of failed lookups of keys */
@@ -1341,7 +1341,7 @@ struct redisServer {
                                                                                     TCP_KEEPINTVL: 等于 tcpkeepalive/3， 探测失败后重新发送探测包的时间间隔
                                                                                     TCP_KEEPCNT: 固定为3，判断连接失败的探测失败册数
                                                                                默认情况下，如果客户端一直没发送请求，则服务端会在300s后发送一个探测包，如果探测失败，则每隔100s再次发送一个探测包，连续三次探测失败就认为连接中断，将关闭客户端 */
-    int active_expire_enabled;      /* Can be disabled for testing purposes. */
+    int active_expire_enabled;      /* Can be disabled for testing purposes.   可以禁用以进行测试。 */
     int active_expire_effort;       /* From 1 (default) to 10, active effort. */
     int active_defrag_enabled;
     int sanitize_dump_payload;      /* Enables deep sanitization for ziplist and listpack in RDB and RESTORE. */
