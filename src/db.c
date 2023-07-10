@@ -50,16 +50,22 @@ int keyIsExpired(redisDb *db, robj *key);
 
 /* Update LFU when an object is accessed.
  * Firstly, decrement the counter if the decrement time is reached.
- * Then logarithmically increment the counter, and update the access time. */
+ * Then logarithmically increment the counter, and update the access time.
+ * 当对象被访问时更新LFU。首先，如果达到递减时间，则递减计数器。然后以对数方式增加计数器，并更新访问时间。
+ * */
 void updateLFU(robj *val) {
+    // 【1】 LFUDecrAndReturn 函数根据键的空闲时间对计数器进行衰减。LFULogIncr 函数负责增加计数
     unsigned long counter = LFUDecrAndReturn(val);
     counter = LFULogIncr(counter);
+    // 【2】 更新redisObject中的高16位，即时间信息。目前我的理解是用来 衰减低`8`位的计数器的，就是根据这个时钟与全局时钟进行比较，如果过了一定时间（做差）就会对计数器进行衰减
     val->lru = (LFUGetTimeInMinutes()<<8) | counter;
 }
 
 /* Low level key lookup API, not actually called directly from commands
  * implementations that should instead rely on lookupKeyRead(),
- * lookupKeyWrite() and lookupKeyReadWithFlags(). */
+ * lookupKeyWrite() and lookupKeyReadWithFlags().
+ * 低级键查找API，实际上不是直接从命令实现中调用，而是依赖于 lookupKeyRead()， lookupKeyWrite()和lookupKeyReadWithFlags()。
+ * */
 robj *lookupKey(redisDb *db, robj *key, int flags) {
     dictEntry *de = dictFind(db->dict,key->ptr);
     if (de) {
@@ -69,9 +75,11 @@ robj *lookupKey(redisDb *db, robj *key, int flags) {
          * Don't do it if we have a saving child, as this will trigger
          * a copy on write madness. */
         if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)){
+            // 【1】 如果使用lfu算法淘汰数据，则调用 updateLFU 更新lfu计数
             if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
                 updateLFU(val);
             } else {
+                // 【2】 否则调用LRU_CLOCK函数更新LRU时间戳
                 val->lru = LRU_CLOCK();
             }
         }

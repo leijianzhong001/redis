@@ -1201,7 +1201,7 @@ struct redisServer {
     dict *orig_commands;        /* Command table before command renaming. */
     aeEventLoop *el;
     rax *errors;                /* Errors table */
-    redisAtomic unsigned int lruclock; /* Clock for LRU eviction */
+    redisAtomic unsigned int lruclock; /* Clock for LRU eviction               LRU时钟，该值会在serverCron函数中被每秒更新一次，每次更新的值为秒级时间戳的低24个bit位。 */
     volatile sig_atomic_t shutdown_asap; /* SHUTDOWN needed ASAP */
     int activerehashing;        /* Incremental rehash in serverCron() */
     int active_defrag_running;  /* Active defragmentation running (holds current scan aggressiveness) */

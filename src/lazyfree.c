@@ -84,7 +84,14 @@ size_t lazyfreeGetFreedObjectsCount(void) {
  * elements.
  *
  * For lists the function returns the number of elements in the quicklist
- * representing the list. */
+ * representing the list.
+ * 返回释放一个对象所需的工作量。返回值并不总是组成对象的实际分配数，而是与之成比例的数字。
+ * 对于字符串，该函数总是返回1。
+ * 对于由哈希表或其他数据结构表示的聚合对象，该函数仅返回组成该对象的元素的数量。
+ * 由单个分配组成的对象总是报告为具有单个项，即使它们实际上是由多个元素逻辑组成的。
+ *
+ * 对于列表，该函数返回快速列表中表示列表的元素个数。
+ * */
 size_t lazyfreeGetFreeEffort(robj *key, robj *obj) {
     if (obj->type == OBJ_LIST) {
         quicklist *ql = obj->ptr;
@@ -146,22 +153,31 @@ size_t lazyfreeGetFreeEffort(robj *key, robj *obj) {
  * */
 #define LAZYFREE_THRESHOLD 64
 int dbAsyncDelete(redisDb *db, robj *key) {
+    //【1】 如果过期字典中存在该key(说明设置了过期时间)，则先从过期字典中删除该key
     /* Deleting an entry from the expires dict will not free the sds of
      * the key, because it is shared with the main dictionary. */
     if (dictSize(db->expires) > 0) dictDelete(db->expires,key->ptr);
 
+    //【2】将该key从数据库字典中移除，返回键值对，这是还没有删除键值对对象
     /* If the value is composed of a few allocations, to free in a lazy way
      * is actually just slower... So under a certain limit we just free
      * the object synchronously. */
     dictEntry *de = dictUnlink(db->dict,key->ptr);
     if (de) {
+        //【3】 计算该键值对的值对象的大小
         robj *val = dictGetVal(de);
 
         /* Tells the module that the key has been unlinked from the database. */
         moduleNotifyKeyUnlink(key,val);
 
+        // 这里返回的实际上是元素个数，比如字符串总是返回1，集合元素则返回元素数量
         size_t free_effort = lazyfreeGetFreeEffort(key,val);
 
+        //【4】 如果值对象的大小大于 LAZYFREE_THRESHOLD （64），并且该值对象只被当前一处引用，则执行如下操作，实现非阻塞删除：
+        //  【4.1】 创建一个后台任务删除值对象，这些后台任务由后台线程处理
+        //  【4.2】 将该键值对的值对象置为null, 保证主线程无法再访问该值对象
+        // 另外大概解释一下这里为什么简单的按照元素个数来判定是否可以惰性删除。对于如字符串这样的单体对象来说，其最大为500mb, 并且一定是在一块连续的内存上，释放这样的内存对于redis来说并不会阻塞主线程。
+        // 但是对于集合元素来说就是另一回事了。集合元素中的元素数量和大小理论上是没有限制的，另外最重要的是，这些元素可能存储在不同的内存块中，即在内存上是不连续的，在删除时要遍历所有的元素，释放其对应的内存空间。
         /* If releasing the object is too much work, do it in the background
          * by adding the object to the lazy free list.
          * Note that if the object is shared, to reclaim it now it is not
@@ -172,14 +188,19 @@ int dbAsyncDelete(redisDb *db, robj *key) {
          * equivalent to just calling decrRefCount(). */
         if (free_effort > LAZYFREE_THRESHOLD && val->refcount == 1) {
             atomicIncr(lazyfree_objects,1);
+            // 添加一个后台释放任务，执行函数为 lazyfreeFreeObject, 要释放的对象为 val
             bioCreateLazyFreeJob(lazyfreeFreeObject,1, val);
+            // 置为NULL之后，主线程中所有该对象的引用都已经被清除，主线程将不再能够访问该对象，此时只有后台线程可以访问该对象，所以后台线程后续删除对象时并不需要进行线程同步操作。
             dictSetVal(db->dict,de,NULL);
         }
     }
 
     /* Release the key-val pair, or just the key if we set the val
-     * field to NULL in order to lazy free it later. */
+     * field to NULL in order to lazy free it later.
+     * 释放key-val对，或者如果我们将val字段设置为NULL，则只释放键，以便稍后惰性释放它。
+     * */
     if (de) {
+        //【5】 删除该键值对对象，并释放其内存空间。如果是非阻塞删除，那么这里的值对象引用已经被设置为NULL了，并不会阻塞当前线程
         dictFreeUnlinkedEntry(db->dict,de);
         if (server.cluster_enabled) slotToKeyDel(key->ptr);
         return 1;
