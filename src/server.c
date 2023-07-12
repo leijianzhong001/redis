@@ -2482,7 +2482,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (server.cluster_enabled) clusterBeforeSleep();
 
     /* Run a fast expire cycle (the called function will return
-     * ASAP if a fast cycle is not needed). */
+     * ASAP if a fast cycle is not needed).
+     * 快模式运行定时删除逻辑 (如果不需要快速循环，被调用的函数将尽快返回)。
+     * */
     if (server.active_expire_enabled && server.masterhost == NULL)
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
@@ -4311,6 +4313,7 @@ int processCommand(client *c) {
      * propagation of DELs due to eviction. */
     // 【4.4】 如果该服务器配置了内存最大限制，则检查内存占用情况，并在有需要时进行数据淘汰。如果数据淘汰失败，则拒绝命令
     if (server.maxmemory && !server.lua_timedout) {
+        // 需要的话尝试淘汰数据
         int out_of_memory = (performEvictions() == EVICT_FAIL);
 
         /* performEvictions may evict keys, so we need flush pending tracking

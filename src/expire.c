@@ -122,28 +122,32 @@ void activeExpireCycle(int type) {
     // active-expire-effort 配置控制了 activeExpireCycle 函数的执行时间，占用CPU的时间，以及最终的数据库中已过期键的比例
     // 该值的配置范围为1~10， 默认为1，该值越大，activeExpireCycle函数执行越久，占用CPU越多，并且清除过后数据库中已过期键的比例越低
     effort = server.active_expire_effort-1, /* Rescale from 0 to 9. */
-    // 【1.2】 每次采样删除操作中采样键的最大数量，默认为20
+    // 【1.2】 每次采样删除操作中采样键的最大数量，默认为20，最大65
     config_keys_per_loop = ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP +
                            ACTIVE_EXPIRE_CYCLE_KEYS_PER_LOOP/4*effort,
-    // 快模式执行的事件间隔
+    // 快模式下函数执行超时时间，默认为1ms, 当 server.active_expire_effort 配置为最大值时，间隔会变成1000+1000/4*9=3250微妙
     config_cycle_fast_duration = ACTIVE_EXPIRE_CYCLE_FAST_DURATION +
                                  ACTIVE_EXPIRE_CYCLE_FAST_DURATION/4*effort,
-    // 最大能使用百分之多少的CPU，默认值为25%. 这个25%实际上是通过占用CPU时间表达的。在每个执行周期的100ms内， timelimit计算的结果为25ms, 所以试试20%
+    // 最大能使用百分之多少的CPU，默认值为25%. 这个25%实际上是通过占用CPU时间表达的。在每个执行周期的100ms内， timelimit计算的结果为25ms, 所以是25%
+    // 当 server.active_expire_effort 配置为最大值时，最大能占用的CPU时间为43ms
     config_cycle_slow_time_perc = ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC +
                                   2*effort,
     // 【1.3】 每次采样后，如果当前已过期键所占比例低于该阈值，则不再处理该数据库，默认为10.即默认情况下，当数据库中已过期的键所占的比例低于10%时，不再处理该数据库
+    // 当 server.active_expire_effort 配置为最大值时，已过期键所占比例为 1%
     config_cycle_acceptable_stale = ACTIVE_EXPIRE_CYCLE_ACCEPTABLE_STALE-
                                     effort;
 
     /* This function has some global state in order to continue the work
-     * incrementally across calls. */
+     * incrementally across calls.
+     * 此函数具有一些全局状态，以便跨调用增量地继续工作
+     * */
     static unsigned int current_db = 0; /* Next DB to test. */
-    static int timelimit_exit = 0;      /* Time limit hit in previous call? */
-    static long long last_fast_cycle = 0; /* When last fast cycle ran. */
+    static int timelimit_exit = 0;      /* Time limit hit in previous call?    前一次调用的时间超时?，注意是静态变量，所以会记录上次该函数执行的状态 */
+    static long long last_fast_cycle = 0; /* When last fast cycle ran.         上一次执行快模式的时间 */
 
     int j, iteration = 0;
     int dbs_per_call = CRON_DBS_PER_CALL;
-    // 【1.1】 timelimit 用于标识activeExpireCycle函数执行的最长时间，该值的计算与函数的执行模式，server.hz, active-expire-effort相关。
+    // 【1.1】 timelimit 用于标识 activeExpireCycle 函数执行的最长时间，该值的计算与函数的执行模式，server.hz, active-expire-effort 相关。
     // 在 ACTIVE_EXPIRE_CYCLE_SLOW 模式下默认为 25000, 在 ACTIVE_EXPIRE_CYCLE_FAST 模式下默认为1000， 单位是微妙
     long long start = ustime(), timelimit, elapsed;
 
@@ -162,7 +166,7 @@ void activeExpireCycle(int type) {
             server.stat_expired_stale_perc < config_cycle_acceptable_stale)
             return;
 
-        // 如果2s内已经执行过一次快模式了，则退出
+        // 如果2ms内已经执行过一次快模式了，则退出
         if (start < last_fast_cycle + (long long)config_cycle_fast_duration*2)
             return;
 
