@@ -3550,15 +3550,15 @@ int populateCommandTableParseFlags(struct redisCommand *c, char *strflags) {
             c->flags |= CMD_WRITE|CMD_CATEGORY_WRITE;
         } else if (!strcasecmp(flag,"read-only")) {
             c->flags |= CMD_READONLY|CMD_CATEGORY_READ;
-        } else if (!strcasecmp(flag,"use-memory")) {
+        } else if (!strcasecmp(flag,"use-memory")) { // 可能需要申请内存空间的命令
             c->flags |= CMD_DENYOOM;
-        } else if (!strcasecmp(flag,"admin")) {
+        } else if (!strcasecmp(flag,"admin")) { // 后台管理命令，如save、shutdown
             c->flags |= CMD_ADMIN|CMD_CATEGORY_ADMIN|CMD_CATEGORY_DANGEROUS;
-        } else if (!strcasecmp(flag,"pub-sub")) {
+        } else if (!strcasecmp(flag,"pub-sub")) { // pub/sub相关命令
             c->flags |= CMD_PUBSUB|CMD_CATEGORY_PUBSUB;
-        } else if (!strcasecmp(flag,"no-script")) {
+        } else if (!strcasecmp(flag,"no-script")) { // lua脚本不允许执行的命令
             c->flags |= CMD_NOSCRIPT;
-        } else if (!strcasecmp(flag,"random")) {
+        } else if (!strcasecmp(flag,"random")) { // 返回不确定数的命令，如当前时间戳
             c->flags |= CMD_RANDOM;
         } else if (!strcasecmp(flag,"to-sort")) {
             c->flags |= CMD_SORT_FOR_SCRIPT;
@@ -3574,7 +3574,7 @@ int populateCommandTableParseFlags(struct redisCommand *c, char *strflags) {
             c->flags |= CMD_ASKING;
         } else if (!strcasecmp(flag,"fast")) {
             c->flags |= CMD_FAST | CMD_CATEGORY_FAST;
-        } else if (!strcasecmp(flag,"no-auth")) {
+        } else if (!strcasecmp(flag,"no-auth")) { // 不需要认证的命令
             c->flags |= CMD_NO_AUTH;
         } else if (!strcasecmp(flag,"may-replicate")) {
             c->flags |= CMD_MAY_REPLICATE;
@@ -3611,10 +3611,14 @@ void populateCommandTable(void) {
         int retval1, retval2;
 
         /* Translate the command string flags description into an actual
-         * set of flags. */
+         * set of flags.
+         * 将命令字符串标志描述转换为一组实际的标志。
+         * 这里将sflags转为flags标志，Redis通过flags标识将命令划分到不同的分类中。
+         * */
         if (populateCommandTableParseFlags(c,c->sflags) == C_ERR)
             serverPanic("Unsupported command flag");
 
+        // 调用 ACLGetCommandID 为 redisCommand.id 赋值，这里会按 server.c/redisCommand-table数组声明 redisCommand 的顺序定义id
         c->id = ACLGetCommandID(c->name); /* Assign the ID used for ACL. */
         retval1 = dictAdd(server.commands, sdsnew(c->name), c);
         /* Populate an additional dictionary that will be unaffected

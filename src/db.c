@@ -1663,10 +1663,10 @@ int getKeysFromCommand(struct redisCommand *cmd, robj **argv, int argc, getKeysR
     if (cmd->flags & CMD_MODULE_GETKEYS) {
         return moduleGetCommandKeysViaAPI(cmd,argv,argc,result);
     } else if (!(cmd->flags & CMD_MODULE) && cmd->getkeys_proc) {
-        // 1、如果redisCommand.getKeys_proc不为空，则调用该函数获取命令的键
+        // 1、如果 redisCommand.getKeys_proc 不为空，则调用该函数获取命令的键
         return cmd->getkeys_proc(cmd,argv,argc,result);
     } else {
-        // 2、redisCommand.firstKey指定命令的键的第一个索引， redisCommand.lastKey 指定命令的最后一个键的索引(负数代表反向索引)， redisCommand.keyStep指定相邻两个键的索引差。
+        // 2、redisCommand.firstKey指定命令的键的第一个索引， redisCommand.lastKey 指定命令的最后一个键的索引(负数代表反向索引)， redisCommand.keyStep 指定相邻两个键的索引差。
         // 利用上面三个属性可以获取命令中的键。如 MSET key1 value1 key2 value2 ... keyN valueN命令，上面3个属性分别为1、-1、2
         return getKeysUsingCommandTable(cmd,argv,argc,result);
     }

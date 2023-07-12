@@ -36,6 +36,7 @@
  * Global state for ACLs
  * ==========================================================================*/
 
+// 定义Rax类型的全局变量 Users， Rax键位用户名，Rax值指向user变量，client.user属性也指向了user变量，代表该客户端关联的用户
 rax *Users; /* Table mapping usernames to user structures. */
 
 user *DefaultUser;  /* Global reference to the default user.
@@ -43,6 +44,8 @@ user *DefaultUser;  /* Global reference to the default user.
                        AUTH or HELLO is used to authenticate with a
                        different user. */
 
+// 这是在配置文件中找到的用户列表，我们需要在Redis初始化的最后阶段加载，在所有modules都已经加载之后。
+// 每个列表元素都是一个以NULL结尾的【SDS指针数组】: 第一个是用户名，其余所有指针都是ACL规则，格式与ACLSetUser()相同。
 list *UsersToLoad;  /* This is a list of users found in the configuration file
                        that we'll need to load in the final stage of Redis
                        initialization, after all the modules are already
@@ -53,10 +56,12 @@ list *UsersToLoad;  /* This is a list of users found in the configuration file
 list *ACLLog;       /* Our security log, the user is able to inspect that
                        using the ACL LOG command .*/
 
+// 命令名到id的映射
 static rax *commandId = NULL; /* Command name to id mapping */
 
 static unsigned long nextid = 0; /* Next command id that has not been assigned */
 
+// 命令分类和命令标志的对应关系
 struct ACLCategoryItem {
     const char *name;
     uint64_t flag;
@@ -240,7 +245,9 @@ void *ACLListDupSds(void *item) {
  * of users (the Users global radix tree), and returns a reference to
  * the structure representing the user.
  *
- * If the user with such name already exists NULL is returned. */
+ * If the user with such name already exists NULL is returned.
+ * 创建具有指定名称的新用户，将其存储在用户列表(users全局基数树)中，并返回对表示该用户的结构的引用。如果该用户名已经存在，则返回NULL。
+ * */
 user *ACLCreateUser(const char *name, size_t namelen) {
     if (raxFind(Users,(unsigned char*)name,namelen) != raxNotFound) return NULL;
     user *u = zmalloc(sizeof(*u));
@@ -250,6 +257,7 @@ user *ACLCreateUser(const char *name, size_t namelen) {
     u->passwords = listCreate();
     u->patterns = listCreate();
     u->channels = listCreate();
+    // 设置一系列回调函数。比如密码匹配函数，密码释放函数等
     listSetMatchMethod(u->passwords,ACLListMatchSds);
     listSetFreeMethod(u->passwords,ACLListFreeSds);
     listSetDupMethod(u->passwords,ACLListDupSds);
@@ -267,7 +275,9 @@ user *ACLCreateUser(const char *name, size_t namelen) {
 /* This function should be called when we need an unlinked "fake" user
  * we can use in order to validate ACL rules or for other similar reasons.
  * The user will not get linked to the Users radix tree. The returned
- * user should be released with ACLFreeUser() as usually. */
+ * user should be released with ACLFreeUser() as usually.
+ * 当我们需要一个未链接的“伪”用户来验证ACL规则或出于其他类似原因时，应该调用这个函数。用户不会被链接到Users rax树。返回的用户应该像往常一样使用ACLFreeUser()释放。
+ * */
 user *ACLCreateUnlinkedUser(void) {
     char username[64];
     for (int j = 0; ; j++) {
@@ -324,7 +334,9 @@ void ACLFreeUserAndKillClients(user *u) {
 
 /* Copy the user ACL rules from the source user 'src' to the destination
  * user 'dst' so that at the end of the process they'll have exactly the
- * same rules (but the names will continue to be the original ones). */
+ * same rules (but the names will continue to be the original ones).
+ * 将用户ACL规则从源用户'src'复制到目标用户'dst'，以便在进程结束时它们将具有完全相同的规则(但名称将继续是原始规则)。
+ * */
 void ACLCopyUser(user *dst, user *src) {
     listRelease(dst->passwords);
     listRelease(dst->patterns);
@@ -804,12 +816,14 @@ void ACLAddAllowedSubcommand(user *u, unsigned long id, const char *sub) {
  * binary data (for instance the >password form may use a binary password).
  * Otherwise the field can be set to -1 and the function will use strlen()
  * to determine the length.
+ * 'op'字符串必须以空结束。'oplen'参数应该指定'op'字符串的长度，以防调用者需要传递二进制数据(例如>password表单可能使用二进制密码)。否则，该字段可以设置为-1，函数将使用strlen()来确定长度。
  *
  * The function returns C_OK if the action to perform was understood because
  * the 'op' string made sense. Otherwise C_ERR is returned if the operation
  * is unknown or has some syntax error.
  *
  * When an error is returned, errno is set to the following values:
+ * 当返回错误时，errno被设置为以下值:
  *
  * EINVAL: The specified opcode is not understood or the key/channel pattern is
  *         invalid (contains non allowed characters).
@@ -1053,9 +1067,11 @@ void ACLInitDefaultUser(void) {
 
 /* Initialization of the ACL subsystem. */
 void ACLInit(void) {
+    // 创建全局Users对象
     Users = raxNew();
     UsersToLoad = listCreate();
     ACLLog = listCreate();
+    // 创建default用户。
     ACLInitDefaultUser();
 }
 
@@ -1124,7 +1140,10 @@ int ACLAuthenticateUser(client *c, robj *username, robj *password) {
  * should have an assigned ID (that is used to index the bitmap). This function
  * creates such an ID: it uses sequential IDs, reusing the same ID for the same
  * command name, so that a command retains the same ID in case of modules that
- * are unloaded and later reloaded. */
+ * are unloaded and later reloaded.
+ * 对于ACL，每个用户都有一个位图，其中包含允许该用户执行的命令。为了填充位图，每个命令都应该有一个指定的ID(用于索引位图)。
+ * 这个函数创建了这样一个ID:它使用顺序ID，为相同的命令名重用相同的ID，以便在卸载和稍后重新加载模块的情况下，命令保留相同的ID。
+ * */
 unsigned long ACLGetCommandID(const char *cmdname) {
 
     sds lowername = sdsnew(cmdname);
@@ -1175,7 +1194,10 @@ user *ACLGetUserByName(const char *name, size_t namelen) {
  * ACL_DENIED_CMD or ACL_DENIED_KEY is returned: the first in case the
  * command cannot be executed because the user is not allowed to run such
  * command, the second if the command is denied because the user is trying
- * to access keys that are not among the specified patterns. */
+ * to access keys that are not among the specified patterns.
+ * 检查命令是否可以在客户端'c'中执行，是否已经被c->cmd引用，并且可以根据与客户端用户c->user关联的acl由该客户端执行。
+ * 如果用户可以执行命令，则返回ACL_OK，否则返回ACL_DENIED_CMD或ACL_DENIED_KEY: 第一个是由于用户不允许运行该命令而无法执行命令，第二个是由于用户试图访问不在指定模式中的键而拒绝命令。
+ * */
 int ACLCheckCommandPerm(client *c, int *keyidxptr) {
     user *u = c->user;
     uint64_t id = c->cmd->id;
@@ -1183,10 +1205,13 @@ int ACLCheckCommandPerm(client *c, int *keyidxptr) {
     /* If there is no associated user, the connection can run anything. */
     if (u == NULL) return ACL_OK;
 
+    // 【1】 USER_FLAG_ALLCOMMANDS 标识代表该用户可以执行所有命令，如果用户打开了该标识，则不需要检查用户是否有执行命令的权限
     /* Check if the user can execute this command or if the command
      * doesn't need to be authenticated (hello, auth). */
     if (!(u->flags & USER_FLAG_ALLCOMMANDS) && !(c->cmd->flags & CMD_NO_AUTH))
     {
+        // 【2】 调用 ACLGetUserCommandBit 函数检查该用户是否有执行此命令的权限。如果命令id在 user.allowed_commands 位图中对应的bit为1，则代表具有执行该命令的权限。
+        // 例如，CLIENT 命令的 redisCommand.id 为160，由于 160/64=2, 160%64=32, 所以只需检查 allowed_commands[2]&(1<<32)是否为1即可。
         /* If the bit is not set we have to check further, in case the
          * command is allowed just with that specific subcommand. */
         if (ACLGetUserCommandBit(u,id) == 0) {
@@ -1198,6 +1223,7 @@ int ACLCheckCommandPerm(client *c, int *keyidxptr) {
                 return ACL_DENIED_CMD;
             }
 
+            // 【3】 如果客户端发送的是子命令，那么就检查用户是否有执行该子命令的权限。遍历 allowed_subcommands[redisCommand.id], 如果找到子命令名，则允许执行子命令
             long subid = 0;
             while (1) {
                 if (u->allowed_subcommands[id][subid] == NULL)
@@ -1210,6 +1236,7 @@ int ACLCheckCommandPerm(client *c, int *keyidxptr) {
         }
     }
 
+    // 【4】 USER_FLAG_ALLKEYS 标识代表该用户可以访问所有的key, 如果用户打开了该标志，则不需要检查用户是否拥有访问key的权限
     /* Check if the user can execute commands explicitly touching the keys
      * mentioned in the command arguments. */
     if (!(c->user->flags & USER_FLAG_ALLKEYS) &&
@@ -1218,11 +1245,13 @@ int ACLCheckCommandPerm(client *c, int *keyidxptr) {
         getKeysResult result = GETKEYS_RESULT_INIT;
         int numkeys = getKeysFromCommand(c->cmd,c->argv,c->argc,&result);
         int *keyidx = result.keys;
+        // 【5】 遍历该命令访问的全部key，检查用户是否拥有访问权限
         for (int j = 0; j < numkeys; j++) {
             listIter li;
             listNode *ln;
             listRewind(u->patterns,&li);
 
+            // 【6】 遍历 user.patterns中所有的key模式，检查key是否匹配其中某个 key pattern
             /* Test this key against every pattern. */
             int match = 0;
             while((ln = listNext(&li))) {
@@ -1365,9 +1394,14 @@ int ACLCheckPubsubPerm(client *c, int idx, int count, int literal, int *idxptr) 
 
 /* Check whether the command is ready to be exceuted by ACLCheckCommandPerm.
  * If check passes, then check whether pub/sub channels of the command is
- * ready to be executed by ACLCheckPubsubPerm */
+ * ready to be executed by ACLCheckPubsubPerm
+ *
+ * 调用 ACLCheckCommandPerm 函数检查是否具有执行该命令的权限。如果检查通过，则调用 ACLCheckPubsubPerm 函数检查是否准备好执行命令的pub/sub通道
+ * */
 int ACLCheckAllPerm(client *c, int *idxptr) {
+    // 【1】 调用 ACLCheckCommandPerm 函数检查用户是否拥有权限执行命令或访问命令的键。
     int acl_retval = ACLCheckCommandPerm(c,idxptr);
+    // 【2】 用户权限检查不通过，则拒绝命令并返回错误
     if (acl_retval != ACL_OK)
         return acl_retval;
     if (c->cmd->proc == publishCommand)
@@ -1402,16 +1436,20 @@ int ACLCheckAllPerm(client *c, int *idxptr) {
  * by reference (if not set to NULL) the argc_err argument with the index
  * of the argv vector that caused the error. */
 int ACLAppendUserForLoading(sds *argv, int argc, int *argc_err) {
+    // argv -> user default on nopass ~* &* +@all
     if (argc < 2 || strcasecmp(argv[0],"user")) {
         if (argc_err) *argc_err = 0;
         return C_ERR;
     }
 
     /* Try to apply the user rules in a fake user to see if they
-     * are actually valid. */
+     * are actually valid.
+     * 尝试在假用户中应用用户规则，看看它们是否真的有效。
+     * */
     user *fakeuser = ACLCreateUnlinkedUser();
 
     for (int j = 2; j < argc; j++) {
+        // 这里实际上相当于执行了setUser命令，验证用户配置的acl规则是否合法
         if (ACLSetUser(fakeuser,argv[j],sdslen(argv[j])) == C_ERR) {
             if (errno != ENOENT) {
                 ACLFreeUser(fakeuser);
@@ -1421,7 +1459,9 @@ int ACLAppendUserForLoading(sds *argv, int argc, int *argc_err) {
         }
     }
 
-    /* Rules look valid, let's append the user to the list. */
+    /* Rules look valid, let's append the user to the list.
+     * 用户规则看起来合法，让我们将用户添加到UsersToLoad列表中。
+     * */
     sds *copy = zmalloc(sizeof(sds)*argc);
     for (int j = 1; j < argc; j++) copy[j-1] = sdsdup(argv[j]);
     copy[argc-1] = NULL;
@@ -1436,6 +1476,7 @@ int ACLAppendUserForLoading(sds *argv, int argc, int *argc_err) {
 int ACLLoadConfiguredUsers(void) {
     listIter li;
     listNode *ln;
+    // 【1】 遍历并处理所有的acl规则（UsersToLoad 表示从redis.conf文件中加载的acl规则）
     listRewind(UsersToLoad,&li);
     while ((ln = listNext(&li)) != NULL) {
         sds *aclrules = listNodeValue(ln);
@@ -1446,6 +1487,8 @@ int ACLLoadConfiguredUsers(void) {
             return C_ERR;
         }
 
+        // 【2】 调用 ACLCreateUser 函数创建用户，同时插入到 Users 基数树中
+        // 这里只是创建用户，还没有应用规则
         user *u = ACLCreateUser(username,sdslen(username));
         if (!u) {
             u = ACLGetUserByName(username,sdslen(username));
@@ -1453,6 +1496,7 @@ int ACLLoadConfiguredUsers(void) {
             ACLSetUser(u,"reset",-1);
         }
 
+        // 【3】 针对该用户的所有规则配置，调用 ACLSetUser 函数进行处理
         /* Load every rule defined for this user. */
         for (int j = 1; aclrules[j]; j++) {
             if (ACLSetUser(u,aclrules[j],sdslen(aclrules[j])) != C_OK) {
@@ -1535,7 +1579,7 @@ sds ACLLoadFromFile(const char *filename) {
     Users = raxNew();
     ACLInitDefaultUser();
 
-    /* Load each line of the file. */
+    /* Load each line of the file. 加载文件的每一行 */
     for (int i = 0; i < totlines; i++) {
         sds *argv;
         int argc;
@@ -1543,7 +1587,7 @@ sds ACLLoadFromFile(const char *filename) {
 
         lines[i] = sdstrim(lines[i]," \t\r\n");
 
-        /* Skip blank lines */
+        /* Skip blank lines 跳过空行 */
         if (lines[i][0] == '\0') continue;
 
         /* Split into arguments */
@@ -1583,7 +1627,10 @@ sds ACLLoadFromFile(const char *filename) {
         /* Try to process the line using the fake user to validate if
          * the rules are able to apply cleanly. At this stage we also
          * trim trailing spaces, so that we don't have to handle that
-         * in ACLSetUser(). */
+         * in ACLSetUser().
+         * 【1】尝试使用fake user验证该行规则，以验证规则是否能够正确地应用。
+         * 在这个阶段，我们还修剪尾随空格，这样我们就不必在ACLSetUser()中处理这个问题。
+         * */
         ACLSetUser(fakeuser,"reset",-1);
         int j;
         for (j = 2; j < argc; j++) {
@@ -1606,16 +1653,21 @@ sds ACLLoadFromFile(const char *filename) {
         }
 
         /* We can finally lookup the user and apply the rule. If the
-         * user already exists we always reset it to start. */
+         * user already exists we always reset it to start.
+         * 【2】 我们最终可以查找用户并应用规则。如果用户已经存在，我们总是将其重置为启动。
+         * */
         user *u = ACLCreateUser(argv[1],sdslen(argv[1]));
         if (!u) {
+            // 返回NULL，说明Users中已经有这个用户了，此时只应用规则，不创建用户
             u = ACLGetUserByName(argv[1],sdslen(argv[1]));
             serverAssert(u != NULL);
             ACLSetUser(u,"reset",-1);
         }
 
         /* Note that the same rules already applied to the fake user, so
-         * we just assert that everything goes well: it should. */
+         * we just assert that everything goes well: it should.
+         * 【3】 调用 ACLSetUser 函数为user对象填充规则
+         * */
         for (j = 2; j < argc; j++)
             serverAssert(ACLSetUser(u,argv[j],sdslen(argv[j])) == C_OK);
 
@@ -1630,7 +1682,9 @@ sds ACLLoadFromFile(const char *filename) {
     if (sdslen(errors) == 0) {
         /* The default user pointer is referenced in different places: instead
          * of replacing such occurrences it is much simpler to copy the new
-         * default user configuration in the old one. */
+         * default user configuration in the old one.
+         * default用户指针在不同的地方被引用: 而不是替换这样的事件，将新的默认用户配置复制到旧的配置中要简单得多。
+         * */
         user *new = ACLGetUserByName("default",7);
         serverAssert(new != NULL);
         ACLCopyUser(DefaultUser,new);
@@ -1716,7 +1770,10 @@ cleanup:
  * loaded, and we are ready to start, in order to load the ACLs either from
  * the pending list of users defined in redis.conf, or from the ACL file.
  * The function will just exit with an error if the user is trying to mix
- * both the loading methods. */
+ * both the loading methods.
+ * 一旦服务器已经运行，modules 已经加载，并且我们已经准备好启动，这个函数就会被调用，以便从redis.conf中定义的挂起用户列表或ACL文件中加载ACL。
+ * 如果用户试图混合使用两种加载方法，则该函数将退出并显示错误。
+ * */
 void ACLLoadUsersAtStartup(void) {
     if (server.acl_filename[0] != '\0' && listLength(UsersToLoad) != 0) {
         serverLog(LL_WARNING,
@@ -1728,6 +1785,7 @@ void ACLLoadUsersAtStartup(void) {
         exit(1);
     }
 
+    // 从redis.conf中加载acl规则
     if (ACLLoadConfiguredUsers() == C_ERR) {
         serverLog(LL_WARNING,
             "Critical error while loading ACLs. Exiting.");
@@ -1735,6 +1793,7 @@ void ACLLoadUsersAtStartup(void) {
     }
 
     if (server.acl_filename[0] != '\0') {
+        // 从 acl_filename 中加载acl规则
         sds errors = ACLLoadFromFile(server.acl_filename);
         if (errors) {
             serverLog(LL_WARNING,
@@ -1891,9 +1950,12 @@ void addACLLogEntry(client *c, int reason, int argpos, sds username) {
  */
 void aclCommand(client *c) {
     char *sub = c->argv[1]->ptr;
+    // 【1】 处理 acl SETUSER 子命令
     if (!strcasecmp(sub,"setuser") && c->argc >= 3) {
         /* Initially redact all of the arguments to not leak any information
-         * about the user. */
+         * about the user.
+         * 最初编辑所有参数以不泄露任何关于用户的信息。
+         * */
         for (int j = 2; j < c->argc; j++) {
             redactClientCommandArgument(c, j);
         }
@@ -1906,6 +1968,7 @@ void aclCommand(client *c) {
             return;
         }
 
+        // 【2】 创建一个临时用户（或者从已存在的用户上复制一个用户），用于执行acl SETUSER 子命令设置的所有规则。如果所有规则都执行成功，那么再应用到真是的用户上。避免 SETUSER 子命令中只有一部分规则应用成功
         /* Create a temporary user to validate and stage all changes against
          * before applying to an existing user or creating a new user. If all
          * arguments are valid the user parameters will all be applied together.
@@ -1914,6 +1977,7 @@ void aclCommand(client *c) {
         user *u = ACLGetUserByName(username,sdslen(username));
         if (u) ACLCopyUser(tempu, u);
 
+        // 【3】 调用 ACLSetUser 函数，应用 acl SETUSER 子命令的所有规则，如果某个规则处理失败，则退出函数。
         for (int j = 3; j < c->argc; j++) {
             if (ACLSetUser(tempu,c->argv[j]->ptr,sdslen(c->argv[j]->ptr)) != C_OK) {
                 const char *errmsg = ACLSetUserStringError();
@@ -1927,10 +1991,13 @@ void aclCommand(client *c) {
         }
 
         /* Existing pub/sub clients authenticated with the user may need to be
-         * disconnected if (some of) their channel permissions were revoked. */
+         * disconnected if (some of) their channel permissions were revoked.
+         * 如果(部分)已通过用户身份验证的现有公用订阅客户端通道权限被撤销，则可能需要断开连接。
+         * */
         if (u && !(tempu->flags & USER_FLAG_ALLCHANNELS))
             ACLKillPubsubClientsIfNeeded(u,tempu->channels);
 
+        // 【4】 将临时用户信息复制到真实的用户信息上，如果用户不存在，则创建一个用户
         /* Overwrite the user with the temporary user we modified above. */
         if (!u) u = ACLCreateUser(username,sdslen(username));
         serverAssert(u != NULL);

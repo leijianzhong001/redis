@@ -807,17 +807,17 @@ typedef struct readyList {
 #define USER_COMMAND_BITS_COUNT 1024    /* The total number of command bits
                                            in the user structure. The last valid
                                            command ID we can set in the user
-                                           is USER_COMMAND_BITS_COUNT-1. */
-#define USER_FLAG_ENABLED (1<<0)        /* The user is active. */
-#define USER_FLAG_DISABLED (1<<1)       /* The user is disabled. */
-#define USER_FLAG_ALLKEYS (1<<2)        /* The user can mention any key. */
-#define USER_FLAG_ALLCOMMANDS (1<<3)    /* The user can run all commands. */
+                                           is USER_COMMAND_BITS_COUNT-1.       用户结构中命令位的总数。我们可以在user中设置的最后一个有效命令 ID 是 USER_COMMAND_BITS_COUNT-1。 */
+#define USER_FLAG_ENABLED (1<<0)        /* The user is active.                 用户已被启用 */
+#define USER_FLAG_DISABLED (1<<1)       /* The user is disabled.               用户已被禁用 */
+#define USER_FLAG_ALLKEYS (1<<2)        /* The user can mention any key.       该用户可以访问所有的键。使用~*给用户授权时会打开该用户标志 */
+#define USER_FLAG_ALLCOMMANDS (1<<3)    /* The user can run all commands.      该用户可以执行所有的命令。使用+@all参数给用户授权，会打开这个标志 */
 #define USER_FLAG_NOPASS      (1<<4)    /* The user requires no password, any
                                            provided password will work. For the
                                            default user, this also means that
                                            no AUTH is needed, and every
                                            connection is immediately
-                                           authenticated. */
+                                           authenticated.                      用户不需要密码，任何提供的密码都可以工作。对于default用户，这也意味着不需要AUTH，并且每个连接都立即进行身份验证。 */
 #define USER_FLAG_ALLCHANNELS (1<<5)    /* The user can mention any Pub/Sub
                                            channel. */
 #define USER_FLAG_SANITIZE_PAYLOAD (1<<6)       /* The user require a deep RESTORE
@@ -825,10 +825,10 @@ typedef struct readyList {
 #define USER_FLAG_SANITIZE_PAYLOAD_SKIP (1<<7)  /* The user should skip the
                                                  * deep sanitization of RESTORE
                                                  * payload. */
-
+// user 结构体负责存储用户信息
 typedef struct {
-    sds name;       /* The username as an SDS string. */
-    uint64_t flags; /* See USER_FLAG_* */
+    sds name;       /* The username as an SDS string.                          用户名 */
+    uint64_t flags; /* See USER_FLAG_*                                         用户标识 */
 
     /* The bit in allowed_commands is set if this user has the right to
      * execute this command. In commands having subcommands, if this bit is
@@ -836,19 +836,30 @@ typedef struct {
      *
      * If the bit for a given command is NOT set and the command has
      * subcommands, Redis will also check allowed_subcommands in order to
-     * understand if the command can be executed. */
+     * understand if the command can be executed.
+     * 如果该用户具有执行该命令的权限，则设置allowed_commands中的bit位。
+     * 在具有子命令的命令中，如果设置了此位，则所有子命令也可用。
+     * 如果给定命令的位没有设置，并且该命令有子命令，Redis也会检查allowed_subcommands以了解该命令是否可以执行。
+     *
+     * 可执行命令的位图。USER_COMMAND_BITS_COUNT 变量的值为1024，代表着redis命令的最大数量。
+     * USER_COMMAND_BITS_COUNT/64是因为一个uint64_t类型有64个bit位，每个bit位代表一个命令是否被授权，该位图中的bit位的索引对应命令id（redisCommand.id）
+     * */
     uint64_t allowed_commands[USER_COMMAND_BITS_COUNT/64];
 
     /* This array points, for each command ID (corresponding to the command
      * bit set in allowed_commands), to an array of SDS strings, terminated by
      * a NULL pointer, with all the sub commands that can be executed for
      * this command. When no subcommands matching is used, the field is just
-     * set to NULL to avoid allocating USER_COMMAND_BITS_COUNT pointers. */
+     * set to NULL to avoid allocating USER_COMMAND_BITS_COUNT pointers.
+     * 对于每个命令ID(对应于allowed_commands中设置的命令位)，该数组指向一个以NULL指针结束的SDS字符串数组，其中包含可以为此命令执行的所有子命令。当不使用子命令匹配时，该字段仅设置为NULL，以避免分配USER_COMMAND_BITS_COUNT指针。
+     *
+     * 二维数组，存储可执行的子命令，一纬索引对应命令id（redisCommand.id）。如 client 命令的 redisCommand.id 为160，给client getname 子命令授权之后，则 allowed_subcommands[160][0]="getname"
+     * */
     sds **allowed_subcommands;
-    list *passwords; /* A list of SDS valid passwords for this user. */
+    list *passwords; /* A list of SDS valid passwords for this user.            密码列表。可以给用户可以设置多个密码。是一个sds的链表 */
     list *patterns;  /* A list of allowed key patterns. If this field is NULL
                         the user cannot mention any key in a command, unless
-                        the flag ALLKEYS is set in the user. */
+                        the flag ALLKEYS is set in the user.                    可访问的键模式列表 如果该字段为NULL，则用户不能在命令中提及任何键，除非在user.flags中设置了ALLKEYS标志。*/
     list *channels;  /* A list of allowed Pub/Sub channel patterns. If this
                         field is NULL the user cannot mention any channel in a
                         `PUBLISH` or [P][UNSUBSCRIBE] command, unless the flag
@@ -1197,7 +1208,7 @@ struct redisServer {
     int hz;                     /* serverCron() calls frequency in hertz */
     int in_fork_child;          /* indication that this is a fork child */
     redisDb *db;                /* 数据库对象，这似乎应该是个数组？ */
-    dict *commands;             /* Command table */
+    dict *commands;             /* Command table                               当前server可运行的命令字典。key为命令名称（get/set）,value为命令对象redisCommand */
     dict *orig_commands;        /* Command table before command renaming. */
     aeEventLoop *el;
     rax *errors;                /* Errors table */
@@ -1676,7 +1687,7 @@ struct redisCommand {
     char *name; // 命令名称，如GET SET DEL等
     redisCommandProc *proc; // 命令处理函数，负责执行命令的逻辑
     int arity; // 命令参数数量。注意，命令名称也是一个参数
-    char *sflags;   /* Flags as string representation, one char per flag. */
+    char *sflags;   /* Flags as string representation, one char per flag.      字符串表示的命令标志，每个标志一个字符，如write、read-only等*/
     uint64_t flags; /* The actual flags, obtained from the 'sflags' field. */
     /* Use a function to determine keys arguments in a command line.
      * Used for Redis Cluster redirect. */
@@ -1690,7 +1701,7 @@ struct redisCommand {
                    is assigned at runtime, and is used in order to check
                    ACLs. A connection is able to execute a given command if
                    the user associated to the connection has this command
-                   bit set in the bitmap of allowed commands. */
+                   bit set in the bitmap of allowed commands.  命令ID。这是一个从0开始的渐进式ID，在运行时分配，用于检查acl。如果与该连接相关联的用户在允许的命令的位图中设置了该命令位，则该连接能够执行给定的命令。*/
 };
 
 struct redisError {
