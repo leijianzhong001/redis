@@ -266,15 +266,15 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CLIENT_PENDING_COMMAND (1<<30) /* Indicates the client has a fully
                                         * parsed command ready for execution.  IO线程已处理完客户端请求数据，主进程可以执行命令 */
 #define CLIENT_TRACKING (1ULL<<31) /* Client enabled keys tracking in order to
-                                   perform client side caching. */
-#define CLIENT_TRACKING_BROKEN_REDIR (1ULL<<32) /* Target client is invalid. */
-#define CLIENT_TRACKING_BCAST (1ULL<<33) /* Tracking in BCAST mode. */
-#define CLIENT_TRACKING_OPTIN (1ULL<<34)  /* Tracking in opt-in mode. */
-#define CLIENT_TRACKING_OPTOUT (1ULL<<35) /* Tracking in opt-out mode. */
+                                   perform client side caching.                该客户端开启了Redis Tracking */
+#define CLIENT_TRACKING_BROKEN_REDIR (1ULL<<32) /* Target client is invalid.   在转发模式下发现转发目标客户端无效则添加该标志 */
+#define CLIENT_TRACKING_BCAST (1ULL<<33) /* Tracking in BCAST mode.            该客户端开启了广播模式 */
+#define CLIENT_TRACKING_OPTIN (1ULL<<34)  /* Tracking in opt-in mode.          该客户端开启了 opt-in 选项。打开该选项后，之后只有在客户端发送 client caching yes 命令后,下一条查询命令才会被服务器记录， 当这个key的值被更改时，服务器应当通知该客户端（但只有一次，通知一次后，如果该key的内容被再次更改，则不会通知） */
+#define CLIENT_TRACKING_OPTOUT (1ULL<<35) /* Tracking in opt-out mode.         该客户端开启了 opt-out 选项。打开该选项后，只有在客户端发送 client caching no 命令之后，下一条查询命令的key才不会被当前服务器记录。 当这个key失效后，不要发送该key的失效消息给当前客户端 */
 #define CLIENT_TRACKING_CACHING (1ULL<<36) /* CACHING yes/no was given,
-                                              depending on optin/optout mode.  客户端开启了客户端缓存功能 */
+                                              depending on optin/optout mode.  该客户端在optin/optout模式下执行了client caching yes/no命令会打开这个标志 */
 #define CLIENT_TRACKING_NOLOOP (1ULL<<37) /* Don't send invalidation messages
-                                             about writes performed by myself.*/
+                                             about writes performed by myself. 该客户端开启了 noloop 选项，在noloop选项下，当客户端变更了某个键之后，服务器不会给该客户端发送失效消息。 noloop选项可以被用于默认模式和广播模式 */
 #define CLIENT_IN_TO_TABLE (1ULL<<38) /* This client is in the timeout table. */
 #define CLIENT_PROTOCOL_ERROR (1ULL<<39) /* Protocol error chatting with it. */
 #define CLIENT_CLOSE_AFTER_COMMAND (1ULL<<40) /* Close after executing commands
@@ -895,7 +895,7 @@ typedef struct client {
     struct redisCommand *cmd, *lastcmd;  /* Last command executed. */
     user *user;             /* User associated with this connection. If the
                                user is set to NULL the connection can do
-                               anything (admin). */
+                               anything (admin).                               与此连接关联的用户。如果用户设置为NULL，则连接可以执行任何操作(admin)。 */
     int reqtype;            /* Request protocol type: PROTO_REQ_*              请求数据协议类型 */
     int multibulklen;       /* Number of multi bulk arguments left to read.    当前解析的命令请求中尚未处理的命令参数数量 */
     long bulklen;           /* Length of bulk argument in multi bulk request.  当前读取命令参数长度。比如【*3\r\n$3set\r\n$5hello\r\n$5world\r\n】中的$3中的3或者$5中的5 */
@@ -956,7 +956,7 @@ typedef struct client {
     uint64_t client_tracking_redirection;
     rax *client_tracking_prefixes; /* A dictionary of prefixes we are already
                                       subscribed to in BCAST mode, in the
-                                      context of client side caching. */
+                                      context of client side caching.          在客户端缓存上下文中，我们已经在BCAST模式下订阅的前缀字典。key为前缀，值为NULL */
     /* In clientsCronTrackClientsMemUsage() we track the memory usage of
      * each client and add it to the sum of all the clients of a given type,
      * however we need to remember what was the old contribution of each

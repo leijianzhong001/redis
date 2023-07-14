@@ -40,8 +40,17 @@
  * of such key will receive an invalidation message.
  *
  * Clients will normally take frequently requested objects in memory, removing
- * them when invalidation messages are received. */
+ * them when invalidation messages are received.
+ * tracking table 由键的基数树组成，每个键都是指向客户端id的基数树，用于跟踪可能在其本地、客户端缓存中具有某些键的客户端。
+ * 当客户端启用“client tracking on”跟踪时，每个提供给客户端的key都会被记录在表中（表中将key映射到client id）。稍后，当一个密钥被修改时，所有可能拥有该key本地副本的客户端都将收到一条失效消息。
+ * 客户端通常会在内存中获取频繁请求的对象，在收到无效消息时将其删除。
+ *
+ * TrackingTable 变量用于非广播模式，TrackingTable 的键记录了客户端查询过的redis键，TrackingTable的值也是Rax变量，这个Rax变量的key为client id, 值为NULL（这里使用rax结构的作用类似于列表，只不过因为rax更加节省内存，所以使用了rax树）
+ * */
 rax *TrackingTable = NULL;
+/**
+ * PrefixTable 变量用于广播模式。其中key为客户端关注的key前缀，value指向bcastState变量
+ */
 rax *PrefixTable = NULL;
 uint64_t TrackingTableTotalItems = 0; /* Total number of IDs stored across
                                          the whole tracking table. This gives
@@ -53,9 +62,9 @@ robj *TrackingChannelName;
  * represents the list of keys modified, and the list of clients that need
  * to be notified, for a given prefix. */
 typedef struct bcastState {
-    rax *keys;      /* Keys modified in the current event loop cycle. */
+    rax *keys;      /* Keys modified in the current event loop cycle.          rax类型，键记录当前已变更的Redis键，值指向变更Redis键的客户端 */
     rax *clients;   /* Clients subscribed to the notification events for this
-                       prefix. */
+                       prefix.                                                 rax类型，键记录所有关注该前缀的客户端（存的是指针，而非client id），值为NULL */
 } bcastState;
 
 /* Remove the tracking state from the client 'c'. Note that there is not much
@@ -151,8 +160,11 @@ int checkPrefixCollisionsOrReply(client *c, robj **prefixes, size_t numprefix) {
 }
 
 /* Set the client 'c' to track the prefix 'prefix'. If the client 'c' is
- * already registered for the specified prefix, no operation is performed. */
+ * already registered for the specified prefix, no operation is performed.
+ * 设置客户端'c'来跟踪前缀'prefix'。如果客户端'c'已经注册了指定的前缀，则不执行任何操作。
+ * */
 void enableBcastTrackingForPrefix(client *c, char *prefix, size_t plen) {
+    // 【1】 从prefix中查找该前缀对应的bcastState，如果不存在，则创建bcastState，并添加到 PrefixTable 中
     bcastState *bs = raxFind(PrefixTable,(unsigned char*)prefix,plen);
     /* If this is the first client subscribing to such prefix, create
      * the prefix in the table. */
@@ -162,6 +174,7 @@ void enableBcastTrackingForPrefix(client *c, char *prefix, size_t plen) {
         bs->clients = raxNew();
         raxInsert(PrefixTable,(unsigned char*)prefix,plen,bs,NULL);
     }
+    // 【2】 将当前客户端添加到 bcastState.clients 中
     if (raxTryInsert(bs->clients,(unsigned char*)&c,sizeof(c),NULL,NULL)) {
         if (c->client_tracking_prefixes == NULL)
             c->client_tracking_prefixes = raxNew();
@@ -176,9 +189,13 @@ void enableBcastTrackingForPrefix(client *c, char *prefix, size_t plen) {
  * specified by the 'redirect_to' argument. Note that if such client will
  * eventually get freed, we'll send a message to the original client to
  * inform it of the condition. Multiple clients can redirect the invalidation
- * messages to the same client ID. */
+ * messages to the same client ID.
+ * 为客户端'c'启用tracking状态，并在需要时分配tracking table。如果'redirect_to'参数不为零，该客户端的无效消息将被发送到'redirect_to'参数指定的客户端ID。
+ * 请注意，如果这样的客户端最终被释放，我们将向原始客户端发送消息，通知它该情况。多个客户端可以将无效消息重定向到相同的客户端ID。
+ * */
 void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **prefix, size_t numprefix) {
     if (!(c->flags & CLIENT_TRACKING)) server.tracking_clients++;
+    // 【1】 客户端添加 CLIENT_TRACKING 标记，并清除其他标记
     c->flags |= CLIENT_TRACKING;
     c->flags &= ~(CLIENT_TRACKING_BROKEN_REDIR|CLIENT_TRACKING_BCAST|
                   CLIENT_TRACKING_OPTIN|CLIENT_TRACKING_OPTOUT|
@@ -186,16 +203,20 @@ void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **pr
     c->client_tracking_redirection = redirect_to;
 
     /* This may be the first client we ever enable. Create the tracking
-     * table if it does not exist. */
+     * table if it does not exist.
+     * 这可能是我们启用的第一个客户端。如果跟踪表不存在，则创建跟踪表
+     * */
     if (TrackingTable == NULL) {
         TrackingTable = raxNew();
         PrefixTable = raxNew();
         TrackingChannelName = createStringObject("__redis__:invalidate",20);
     }
 
+    // 【2】如果开启了广播模式，则将客户端关注的前缀添加到 PrefixTable 中
     /* For broadcasting, set the list of prefixes in the client. */
     if (options & CLIENT_TRACKING_BCAST) {
         c->flags |= CLIENT_TRACKING_BCAST;
+        // 如果没有前缀，则会添加一个空字符串作为前缀，这样在任务键变更之后，都会发送失效消息给当前客户端，可能会导致性能问题，所以在广播模式下通常使用 prefix 前缀标识客户端只关注指定前缀开头的键
         if (numprefix == 0) enableBcastTrackingForPrefix(c,"",0);
         for (size_t j = 0; j < numprefix; j++) {
             sds sdsprefix = prefix[j]->ptr;
@@ -203,6 +224,7 @@ void enableTracking(client *c, uint64_t redirect_to, uint64_t options, robj **pr
         }
     }
 
+    // 【3】
     /* Set the remaining flags that don't need any special handling. */
     c->flags |= options & (CLIENT_TRACKING_OPTIN|CLIENT_TRACKING_OPTOUT|
                            CLIENT_TRACKING_NOLOOP);

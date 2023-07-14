@@ -2706,6 +2706,7 @@ void resetCommand(client *c) {
     addReplyStatus(c,"RESET");
 }
 
+// 该函数用于处理client相关的命令
 void clientCommand(client *c) {
     listNode *ln;
     listIter li;
@@ -2986,6 +2987,7 @@ NULL
         pauseClients(end, type);
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"tracking") && c->argc >= 3) {
+        // 处理客户端缓存相关的功能
         /* CLIENT TRACKING (on|off) [REDIRECT <id>] [BCAST] [PREFIX first]
          *                          [PREFIX second] [OPTIN] [OPTOUT] ... */
         long long redir = 0;
@@ -3043,7 +3045,9 @@ NULL
         /* Options are ok: enable or disable the tracking for this client. */
         if (!strcasecmp(c->argv[2]->ptr,"on")) {
             /* Before enabling tracking, make sure options are compatible
-             * among each other and with the current state of the client. */
+             * among each other and with the current state of the client.
+             * 在启用跟踪tracking，请确保选项彼此兼容，并与客户端的当前状态兼容。
+             * */
             if (!(options & CLIENT_TRACKING_BCAST) && numprefix) {
                 addReplyError(c,
                     "PREFIX option requires BCAST mode to be enabled");
@@ -3098,7 +3102,7 @@ NULL
                     return;
                 }
             }
-
+            // 开启 redis Tracking机制
             enableTracking(c,redir,options,prefix,numprefix);
         } else if (!strcasecmp(c->argv[2]->ptr,"off")) {
             disableTracking(c);

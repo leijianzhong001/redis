@@ -4091,7 +4091,8 @@ void call(client *c, int flags) {
 
     /* If the client has keys tracking enabled for client side caching,
      * make sure to remember the keys it fetched via this command. */
-    // 【7】 如果执行的是一个查询命令，那么redis要记住该命令，后续当查询的键发生变化时，需要通知客户端。这是redis 6新增的tracking机制（客户端缓存机制）
+    // 【7】 如果执行的是一个查询命令，并且开启了客户端缓存功能，那么redis要记住该命令，后续当查询的键发生变化时，需要通知客户端。这是redis 6新增的tracking机制（客户端缓存机制）
+    // 注意：广播模式下不需要记住命令的键，只有默认模式才需要
     if (c->cmd->flags & CMD_READONLY) {
         client *caller = (c->flags & CLIENT_LUA && server.lua_caller) ?
                             server.lua_caller : c;
