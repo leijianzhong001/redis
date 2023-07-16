@@ -2536,7 +2536,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     serverAssert(listLength(server.tracking_pending_keys) == 0);
 
     /* Send the invalidation messages to clients participating to the
-     * client side caching protocol in broadcasting (BCAST) mode. */
+     * client side caching protocol in broadcasting (BCAST) mode.
+     * 以广播模式开启了客户端缓存的客户端首先会在将key被变更时，由trackingRememberKeyToBroadcast函数将被变更的key添加到前缀表中PrefixTable，然后在这里真正发送失效消息给客户端
+     * */
     trackingBroadcastInvalidationMessages();
 
     /* Write the AOF buffer on disk */
@@ -4320,7 +4322,9 @@ int processCommand(client *c) {
         /* performEvictions may evict keys, so we need flush pending tracking
          * invalidation keys. If we don't do this, we may get an invalidation
          * message after we perform operation on the key, where in fact this
-         * message belongs to the old value of the key before it gets evicted.*/
+         * message belongs to the old value of the key before it gets evicted.
+         * performanvictions 可能会驱逐键，所以我们需要刷新待发送的tracking失效键。如果我们不这样做，我们可能会在对键执行操作后得到一条无效消息，实际上该消息属于该键被驱逐之前的旧值。
+         * */
         trackingHandlePendingKeyInvalidations();
 
         /* performEvictions may flush slave output buffers. This may result

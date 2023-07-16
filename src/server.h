@@ -877,7 +877,7 @@ typedef struct {
 typedef struct client {
     uint64_t id;            /* Client incremental unique ID. */
     connection *conn;
-    int resp;               /* RESP protocol version. Can be 2 or 3. */
+    int resp;               /* RESP protocol version. Can be 2 or 3.           当前客户端使用的RESP协议版本。是2还是3 */
     redisDb *db;            /* Pointer to currently SELECTed DB. */
     robj *name;             /* As set by CLIENT SETNAME. */
     sds querybuf;           /* Buffer we use to accumulate client queries.     查询缓冲区，用于存放客户端请求数据 */
@@ -952,7 +952,9 @@ typedef struct client {
 
     /* If this client is in tracking mode and this field is non zero,
      * invalidation messages for keys fetched by this client will be send to
-     * the specified client ID. */
+     * the specified client ID.
+     * 如果该客户端处于tracking模式并且该字段不为零，则该客户端获取的key的无效消息将发送到指定的客户端ID。
+     * */
     uint64_t client_tracking_redirection;
     rax *client_tracking_prefixes; /* A dictionary of prefixes we are already
                                       subscribed to in BCAST mode, in the
@@ -1549,7 +1551,7 @@ struct redisServer {
     /* Client side caching. */
     unsigned int tracking_clients;  /* # of clients with tracking enabled.*/
     size_t tracking_table_max_keys; /* Max number of keys in tracking table. */
-    list *tracking_pending_keys; /* tracking invalidation keys pending to flush */
+    list *tracking_pending_keys; /* tracking invalidation keys pending to flush 待刷出到客户端的的失效键 */
     /* Sort parameters - qsort_r() is only available under BSD so we
      * have to take this state global, in order to pass it to sortCompare() */
     int sort_desc;

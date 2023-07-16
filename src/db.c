@@ -589,10 +589,14 @@ long long dbTotalServerKeyCount() {
  * signalModifiedKey() is called.
  *
  * Every time a DB is flushed the function signalFlushDb() is called.
+ *
+ * 用于键空间更改的钩子函数。每次修改数据库中的一个键时，就调用函数signalModifiedKey()。每次flush DB时，调用函数signalFlushDb()。
  *----------------------------------------------------------------------------*/
 
 /* Note that the 'c' argument may be NULL if the key was modified out of
- * a context of a client. */
+ * a context of a client.
+ * 请注意，如果键是在客户端上下文之外(可能是被数据库本身修改的，如过期删除)修改的，则'c'参数可能为NULL。
+ * */
 void signalModifiedKey(client *c, redisDb *db, robj *key) {
     touchWatchedKey(db,key);
     trackingInvalidateKey(c,key,1);
