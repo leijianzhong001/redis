@@ -3039,6 +3039,7 @@ void sentinelInfoReplyCallback(redisAsyncContext *c, void *reply, void *privdata
     r = reply;
 
     if (r->type == REDIS_REPLY_STRING)
+        // 实际上的回调函数是 sentinelRefreshInstanceInfo
         sentinelRefreshInstanceInfo(ri,r->str);
 }
 
@@ -3155,7 +3156,7 @@ void sentinelProcessHelloMessage(char *hello, int hello_len) {
              * */
             removed = removeMatchingSentinelFromMaster(master,token[2]);
             if (removed) {
-                // removed为1表示sentinels字典中由这个runid，并且成功删除了
+                // removed为1表示sentinels字典中有这个runid，并且成功删除了
                 sentinelEvent(LL_NOTICE,"+sentinel-address-switch",master,
                     "%@ ip %s port %d for %s", token[0],port,token[2]);
             } else {
@@ -4545,6 +4546,7 @@ void sentinelCheckSubjectivelyDown(sentinelRedisInstance *ri) {
      *    than SENTINEL_MIN_LINK_RECONNECT_PERIOD, but still we have no
      *    activity in the Pub/Sub channel for more than
      *    SENTINEL_PUBLISH_PERIOD * 3.
+     *    2)检查pubsub链路是否连接，连接时间不少于SENTINEL_MIN_LINK_RECONNECT_PERIOD，但我们在pubsub通道中仍然没有活动超过SENTINEL_PUBLISH_PERIOD*3。
      */
     if (ri->link->pc &&
         (mstime() - ri->link->pc_conn_time) >
@@ -5564,6 +5566,7 @@ void sentinelHandleRedisInstance(sentinelRedisInstance *ri) {
      * sudden change in the clock. */
     if (sentinel.tilt) {
         if (mstime()-sentinel.tilt_start_time < SENTINEL_TILT_PERIOD) return;
+        // 从 tilt 模式中恢复正常
         sentinel.tilt = 0;
         sentinelEvent(LL_WARNING,"-tilt",NULL,"#tilt mode exited");
     }
@@ -5605,7 +5608,9 @@ void sentinelHandleDictOfRedisInstances(dict *instances) {
     dictEntry *de;
     sentinelRedisInstance *switch_to_promoted = NULL;
 
-    /* There are a number of things we need to perform agai nst every master. */
+    /* There are a number of things we need to perform agai nst every master.
+     * 我们需要做很多事情来检活每一个master.
+     * */
     di = dictGetIterator(instances);
     while((de = dictNext(di)) != NULL) {
         sentinelRedisInstance *ri = dictGetVal(de);
