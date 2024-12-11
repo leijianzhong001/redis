@@ -1257,7 +1257,8 @@ struct redisServer {
     list *clients_to_close;     /* Clients to close asynchronously */
     list *clients_pending_write; /* There is to write or install handler. */
     list *clients_pending_read;  /* Client has pending read socket buffers. */
-    list *slaves, *monitors;    /* List of slaves and MONITORs                 slaves为从节点客户端列表，记录当前服务器下所有的从节点客户端 */
+    list *slaves, *monitors;    /* List of slaves and MONITORs                 slaves为从节点客户端列表，记录当前服务器下所有的从节点客户端.
+ *                                                                              注意，所有执行了monitor命令的客户端也会白添加到这个列表中，redis在执行完命令之后，会将命令传播给这个列表中的所有客户端 */
     client *current_client;     /* Current client executing the command. */
     rax *clients_timeout_table; /* Radix tree for blocked clients timeouts. */
     long fixed_time_expire;     /* If > 0, expire keys against server.mstime. */

@@ -2795,6 +2795,7 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
         if (sdslen(l) >= 32 &&
             !memcmp(l,"master_link_down_since_seconds",30))
         {
+            // 递增和主节点失联的时间
             ri->master_link_down_time = strtoll(l+31,NULL,10)*1000;
         }
 
