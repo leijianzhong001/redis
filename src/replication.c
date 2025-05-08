@@ -2718,7 +2718,7 @@ void syncWithMaster(connection *conn) {
             else
                 port = server.port;
             sds portstr = sdsfromlonglong(port);
-            // 发送 REPLCONF listening-port 6379 命令给主节点，是的主节点能够知道从节点暴露的监听端口
+            // 发送 REPLCONF listening-port 6379 命令给主节点，使得主节点能够知道从节点暴露的监听端口
             err = sendCommand(conn,"REPLCONF",
                     "listening-port",portstr, NULL);
             sdsfree(portstr);

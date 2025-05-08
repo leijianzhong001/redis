@@ -5350,12 +5350,12 @@ void sentinelFailoverDetectEnd(sentinelRedisInstance *master) {
      * configured.
      * 一旦正确配置（slaveof）了所有可访问的从服务器，故障转移就会终止。
      *
-     * 注意：这里的这个slave字典包含了原本所有的从节点以及晋升的从节点，但不包含宕机的主节点
+     * 注意：这里的这个slave字典包含了原本所有的从节点以及晋升的从节点，但不包含宕机的主节点, 因为当前sentinel尚未更新自己的master和slave字典
      * */
     di = dictGetIterator(master->slaves);
     while((de = dictNext(di)) != NULL) {
         sentinelRedisInstance *slave = dictGetVal(de);
-
+        // 主从超时 发生的主要原因就是在Sentinel看来存活的从节点无法和新的主节点建立连接，导致超时
         if (slave->flags & (SRI_PROMOTED|SRI_RECONF_DONE)) continue;
         if (slave->flags & SRI_S_DOWN) continue;
         not_reconfigured++;
@@ -5393,6 +5393,8 @@ void sentinelFailoverDetectEnd(sentinelRedisInstance *master) {
             sentinelRedisInstance *slave = dictGetVal(de);
             int retval;
 
+            // 注意，这里会过滤掉已经晋升为主节点SRI_PROMOTED的从节点，这样，即使主从切换超时，也不会错误的给已经晋升的从节点发送slaveof命令
+            // 在旧版本的Redis中存在这个bug，一旦主从切换超时，由于此时slave字典中还会存在已经晋升的从节点，那么就会给已经晋升的从节点发送slaveof <itself>命令，导致自己复制自己。
             if (slave->flags & (SRI_PROMOTED|SRI_RECONF_DONE|SRI_RECONF_SENT)) continue;
             if (slave->link->disconnected) continue;
 
