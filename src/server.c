@@ -3763,7 +3763,7 @@ void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
      * client pause, otherwise data may be lossed during a failover. */
     serverAssert(!(areClientsPaused() && !server.client_pause_in_transaction));
 
-    // 在开启aof持久化的情况下，redis将执行的每个命令都传播到aaof缓冲区 server.aof_buf 中
+    // 在开启aof持久化的情况下，redis将执行的每个命令都传播到aof缓冲区 server.aof_buf 中
     if (server.aof_state != AOF_OFF && flags & PROPAGATE_AOF)
         // 传播已执行的命令到aof缓冲区 server.aof_buf 中
         feedAppendOnlyFile(cmd,dbid,argv,argc);
@@ -3951,7 +3951,8 @@ void call(client *c, int flags) {
      * the script if the command flag or client flag are forcing the
      * propagation. */
     // 【3.2】 如果当前客户端是一个lua脚本伪客户端，即将该客户端的 CLIENT_FORCE_REPL，CLIENT_FORCE_AOF 标志转移到真实的客户端中
-    // 在lua脚本中调用 redis.call 函数，redis会构建伪客户端调用call函数并将真实的客户端client记录到server.lua_caller中，这样命令执行过程中打开的 CLIENT_FORCE_REPL和CLIENT_FORCE_AOF 会添加到伪客户端中，所以这里需要转移这些标志
+    // 在lua脚本中调用 redis.call 函数，redis会构建伪客户端调用call函数并将真实的客户端client记录到server.lua_caller中，
+    // 这样命令执行过程中打开的 CLIENT_FORCE_REPL和CLIENT_FORCE_AOF 会添加到伪客户端中，所以这里需要转移这些标志
     if (c->flags & CLIENT_LUA && server.lua_caller) {
         if (c->flags & CLIENT_FORCE_REPL)
             server.lua_caller->flags |= CLIENT_FORCE_REPL;
@@ -4011,7 +4012,7 @@ void call(client *c, int flags) {
 
         /* If the client forced AOF / replication of the command, set
          * the flags regardless of the command effects on the data set. */
-        // 【4.2】 如果client打开了 CLIENT_FORCE_REPL、CLIENT_FORCE_AOF 标志，则 propagate_flags 添加 PROPAGATE_REPL，PROPAGATE_AOF 标志
+        // 【4.2】 如果 client 打开了 CLIENT_FORCE_REPL、CLIENT_FORCE_AOF 标志，则 propagate_flags 添加 PROPAGATE_REPL，PROPAGATE_AOF 标志
         if (c->flags & CLIENT_FORCE_REPL) propagate_flags |= PROPAGATE_REPL;
         if (c->flags & CLIENT_FORCE_AOF) propagate_flags |= PROPAGATE_AOF;
 
@@ -4029,7 +4030,7 @@ void call(client *c, int flags) {
         /* Call propagate() only if at least one of AOF / replication
          * propagation is needed. Note that modules commands handle replication
          * in an explicit way, so we never replicate them automatically.
-         * 【4.4】 只有当至少需要一个AOF / replication传播时，才调用propagate()。请注意，模块命令以显式的方式处理复制，因此我们不会自动复制它们。
+         * 【4.4】 只有当至少需要一个 AOF/replication 传播时，才调用 propagate() 。请注意，模块命令以显式的方式处理复制，因此我们不会自动复制它们。
          * */
         if (propagate_flags != PROPAGATE_NONE && !(c->cmd->flags & CMD_MODULE))
             propagate(c->cmd,c->db->id,c->argv,c->argc,propagate_flags);

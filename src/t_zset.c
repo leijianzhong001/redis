@@ -521,7 +521,7 @@ zskiplistNode* zslGetElementByRank(zskiplist *zsl, unsigned long rank) {
     x = zsl->header;
     // 【1】 从头节点的最高层开始查找 zsl->level 代表skiplist中层数最大的节点的层数
     for (i = zsl->level-1; i >= 0; i--) {
-        // 【2】 如果存在后驱节点，并且后驱节点的的索引小于目标值。每次使用 forward 跳转到后驱节点，traversed变量都需要加上span, 得到下一个节点的索引
+        // 【2】 如果存在后驱节点，并且后驱节点的的索引小于目标值。每次使用 forward 跳转到后驱节点，traversed 变量都需要加上 span, 得到下一个节点的索引
         // 注意: rank 值指的是排名，不是具体的分值
         while (x->level[i].forward && (traversed + x->level[i].span) <= rank)
         {

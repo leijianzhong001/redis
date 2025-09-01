@@ -1525,7 +1525,9 @@ struct redisServer {
     long long master_initial_offset;           /* Master PSYNC offset.         向主节点发起psync请求时的 offset。在接收完RDB数据后，进入复制阶段之前，会将该值赋给当前节点的 server.master_repl_offset 属性，并在创建主节点客户端时，将这个属性赋给 server.master.reploff 属性*/
     int repl_slave_lazy_flush;          /* Lazy FLUSHALL before loading DB? */
     /* Replication script cache. */
-    dict *repl_scriptcache_dict;        /* SHA1 all slaves are aware of. */
+    dict *repl_scriptcache_dict;        /* SHA1 all slaves are aware of.       主节点使用 server.repl_scriptcache_dict 字典记录已经复制给全部从服务器的脚本(当出现新的从节点时，需要清空该字典)， 其中键为脚本SHA1校验值，而值为NULL。
+                                                                               主节点执行 EVALSHA 命令后，如果在 server.repl_scriptcache_dict 中可以找到该脚本 SHA1 校验值，则传播 EVALSHA 命令，
+                                                                               如果找不到，则需要将 EVALSHA 转换成相等的 EVAL 命令后再传播， 并将该脚本SHA1校验值添加到 server.repl_scriptcache_dict 字典中 */
     list *repl_scriptcache_fifo;        /* First in, first out LRU eviction. */
     unsigned int repl_scriptcache_size; /* Max number of elements. */
     /* Synchronous replication. */
@@ -1612,22 +1614,24 @@ struct redisServer {
     client *lua_client;   /* The "fake client" to query Redis from Lua */
     client *lua_caller;   /* The client running EVAL right now, or NULL */
     char* lua_cur_script; /* SHA1 of the script currently running, or NULL */
-    dict *lua_scripts;         /* A dictionary of SHA1 -> Lua scripts */
+    dict *lua_scripts;         /* A dictionary of SHA1 -> Lua scripts          lua_scripts 字典负责缓存lua脚本，键为SHA1校验值，值为lua脚本内容。使用该缓存
+                                                                               使用该缓存，Redis可以避免每次都重新编译Lua脚本 */
     unsigned long long lua_scripts_mem;  /* Cached scripts' memory + oh */
     mstime_t lua_time_limit;  /* Script timeout in milliseconds */
     monotime lua_time_start;  /* monotonic timer to detect timed-out script */
     mstime_t lua_time_snapshot; /* Snapshot of mstime when script is started */
     int lua_write_dirty;  /* True if a write command was called during the
-                             execution of the current script. */
+                             execution of the current script.                  如果在当前脚本执行期间调用了写命令，则为True。 */
     int lua_random_dirty; /* True if a random command was called during the
-                             execution of the current script. */
+                             execution of the current script.                  如果在当前脚本执行期间调用了随机命令，则为True。 */
     int lua_replicate_commands; /* True if we are doing single commands repl. */
-    int lua_multi_emitted;/* True if we already propagated MULTI. */
+    int lua_multi_emitted;/* True if we already propagated MULTI.              如果想要在写命令中传播 MULTI，则设置为TRUE */
     int lua_repl;         /* Script replication flags for redis.set_repl(). */
     int lua_timedout;     /* True if we reached the time limit for script
                              execution. */
     int lua_kill;         /* Kill the script if true. */
-    int lua_always_replicate_commands; /* Default replication type. */
+    int lua_always_replicate_commands; /* Default replication type.            默认是否打开 脚本效果复制 模式。 默认情况下，我们希望脚本总是通过效果（脚本执行的单个命令）来复制，而不是通过将脚本发送到从属AOF来复制。
+                                                                               这是从 Redis 5开始的新方式。但是，可以通过redis.conf恢复它 */
     int lua_oom;          /* OOM detected when script start? */
     /* Lazy free */
     int lazyfree_lazy_eviction;

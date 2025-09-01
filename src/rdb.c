@@ -1440,9 +1440,11 @@ int rdbSaveRio(rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
      * the script cache as well: on successful PSYNC after a restart, we need
      * to be able to process any EVALSHA inside the replication backlog the
      * master will send us.
-     * 如果我们将复制信息存储在磁盘上，那么也要持久化脚本缓存:在重启后PSYNC成功时，我们需要能够处理主服务器发送给我们的复制积压中的任何EVALSHA。
+     *
+     * 如果我们将复制信息存储在磁盘上，那么也要持久化脚本缓存: 在重启后PSYNC成功时，我们需要能够处理主服务器发送给我们的复制积压中的任何 EVALSHA 。
      * */
     if (rsi && dictSize(server.lua_scripts)) {
+        // 将lua脚本持久化到rdb文件中
         di = dictGetIterator(server.lua_scripts);
         while((de = dictNext(di)) != NULL) {
             robj *body = dictGetVal(de);

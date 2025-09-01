@@ -795,7 +795,7 @@ int startBgsaveForReplication(int mincapa) {
     /* Flush the script cache, since we need that slave differences are
      * accumulated without requiring slaves to match our cached scripts.
      *
-     * 刷新脚本缓存，因为我们需要累积从服务器的差异，而不需要从服务器匹配缓存的脚本
+     * 清空 server.repl_scriptcache_dict 字典，因为我们需要累积从服务器的差异，而不需要slaves服务器匹配缓存的脚本
      * */
     if (retval == C_OK) replicationScriptCacheFlush();
     return retval;
@@ -3649,6 +3649,7 @@ void replicationScriptCacheInit(void) {
  *    to reclaim otherwise unused memory.
  */
 void replicationScriptCacheFlush(void) {
+    // 当添加一个新的从节点的时候，记得清空 server.repl_scriptcache_dict 字典，主节点使用 server.repl_scriptcache_dict 字典记录已经复制给全部从服务器的脚本(当出现新的从节点时，需要清空该字典)
     dictEmpty(server.repl_scriptcache_dict,NULL);
     listRelease(server.repl_scriptcache_fifo);
     server.repl_scriptcache_fifo = listCreate();
